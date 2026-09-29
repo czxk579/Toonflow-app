@@ -15,6 +15,9 @@ export async function createAgentModel(providerId: string, modelId: string, thin
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: model.contextWindow, maxTokens: model.maxOutputTokens,
+      // ACT: 强制使用 system role，避免对千问 / deepseek / 豆包等 OpenAI 兼容
+      // API 发送不被接受的 "developer" role 而报 400（messages.[0].role）。
+      compat: { supportsDeveloperRole: false },
     }],
   });
   await runtime.setRuntimeApiKey(providerId, provider.apiKey);

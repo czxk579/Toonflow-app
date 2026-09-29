@@ -132,6 +132,9 @@ export function streamAi(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: configuredModel.contextWindow,
     maxTokens: configuredModel.maxOutputTokens,
+    // ACT: 强制使用 system role，避免对千问 / deepseek / 豆包等 OpenAI 兼容
+    // API 发送不被接受的 "developer" role 而报 400（messages.[0].role）。
+    compat: { supportsDeveloperRole: false },
   };
   // ACT: 不按模型名预判附件能力；按供应商协议传递，是否支持由上游接口决定。
   return aiApis[provider.protocol].streamSimple(model, context, {
