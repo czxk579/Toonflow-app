@@ -18,7 +18,7 @@ const rules = [
 ] as const;
 
 const apiUrl = "https://api.modelverse.cn/v1";
-const version = "1.0.2";
+const version = "1.0.3";
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("ModelVerse 响应格式错误");
@@ -98,15 +98,27 @@ function extractMediaUrl(data: Record<string, unknown>, kind: "image" | "video")
 }
 
 /** 把 Toonflow 节点的 (size, ratio) 翻译成 ModelVerse 接受的像素字符串，如 "1024x1792" */
-function resolveImageSize(size: string | undefined, ratio: string | undefined): string {
-  const TABLE: Record<string, Record<string, [number, number]>> = {
+function resolveImageSize(size: string | undefined, ratio: string | undefined, model: string): string {
+  if (model === "qwen-image-3.0") {
+    const dimensions: Record<string, [number, number]> = {
+      "1:1": [1024, 1024], "3:4": [864, 1152], "4:3": [1152, 864],
+      "9:16": [720, 1280], "16:9": [1280, 720],
+    };
+    if (size !== undefined && size !== "1K" && size !== "2K") throw new Error("Qwen-Image-3.0 请选择 1K 或 2K 尺寸");
+    const pixels = dimensions[ratio ?? "1:1"];
+    if (!pixels) throw new Error("Qwen-Image-3.0 不支持此比例，请选择 1:1、3:4、4:3、9:16 或 16:9");
+    const scale = size === "2K" ? 2 : 1;
+    // 每档保持所选比例，2K 总像素不超过 2048*2048。
+    return `${pixels[0] * scale}*${pixels[1] * scale}`;
+  }
+  const sizes: Record<string, Record<string, [number, number]>> = {
     "1K":   { "1:1": [1024, 1024], "3:4": [1024, 1536], "4:3": [1152, 896],  "9:16": [1024, 1792], "16:9": [1792, 1024] },
     "1.5K": { "1:1": [1536, 1536], "3:4": [1536, 2048], "4:3": [1728, 1296], "9:16": [1536, 2688], "16:9": [2688, 1536] },
     "2K":   { "1:1": [2048, 2048], "3:4": [2048, 3072], "4:3": [2304, 1728], "9:16": [2048, 3584], "16:9": [3584, 2048] },
   };
-  const tier = size && TABLE[size] ? size : "1K";
-  const r = ratio && TABLE[tier][ratio] ? ratio : "1:1";
-  const [w, h] = TABLE[tier][r];
+  const tier = size && sizes[size] ? size : "1K";
+  const r = ratio && sizes[tier][ratio] ? ratio : "1:1";
+  const [w, h] = sizes[tier][r];
   return `${w}x${h}`;
 }
 
@@ -120,7 +132,7 @@ export default {
   models: [
     {
       id: "qwen-image-3.0",
-      label: "通义万相 Qwen-Image-3.0（¥0.02/张）",
+      label: "通义千问 Qwen-Image-3.0（¥0.02/张）",
       type: "image",
       mode: ["text", "singleImage", "multiReference"],
       imageSizes: ["1K", "2K"],
@@ -191,9 +203,14 @@ export default {
     if (!apiKey) throw new Error("请填写 ModelVerse API Key");
     const signal = AbortSignal.any([AbortSignal.timeout(10 * 60_000), ...(this.signal ? [this.signal] : [])]);
     const imageUrls = (request.images ?? []).map(mediaUrl);
+    const isQwenImage = request.model === "qwen-image-3.0";
+    if (isQwenImage && imageUrls.length > 3) throw new Error("Qwen-Image-3.0 最多支持 3 张参考图");
+    if (isQwenImage && request.n !== undefined && (!Number.isInteger(request.n) || request.n < 1 || request.n > 6)) {
+      throw new Error("Qwen-Image-3.0 每次支持生成 1 至 6 张图片");
+    }
 
     // 把 Toonflow 的 (size, ratio) 翻成 ModelVerse 接受的像素字符串
-    const pixelSize = resolveImageSize(request.size, request.ratio);
+    const pixelSize = resolveImageSize(request.size, request.ratio, request.model);
 
     // 主路径：同步出图（OpenAI images 协议）—— ModelVerse 已实测支持
     const syncResponse = await this.tool.fetch(`${apiUrl}/images/generations`, {
@@ -204,7 +221,7 @@ export default {
         prompt: request.prompt,
         n: request.n ?? 1,
         size: pixelSize,
-        ...(imageUrls.length ? { image_urls: imageUrls } : {}),
+        ...(imageUrls.length ? (isQwenImage ? { images: imageUrls } : { image_urls: imageUrls }) : {}),
       }),
       signal,
     });
@@ -220,6 +237,11 @@ export default {
     const payload = object(await syncResponse.json());
     const data = payload.data ?? payload.images ?? payload;
     if (Array.isArray(data) && data.length) {
+      if (isQwenImage) return data.map((item): MediaAsset => {
+        const url = object(item).url;
+        if (typeof url !== "string" || !/^https?:\/\//.test(url)) throw new Error("Qwen-Image-3.0 返回了无效的图片 URL");
+        return { mediaType: "image", type: "url", url };
+      });
       const first = data[0];
       if (typeof first === "string" && /^https?:\/\//.test(first)) return [{ mediaType: "image", type: "url", url: first }];
       if (first && typeof first === "object") {
