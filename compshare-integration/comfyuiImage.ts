@@ -1,6 +1,6 @@
 // 用途：Toonflow-app 媒体供应商适配「ComfyUI 云 GPU（图像）」
 // 安装方式：Toonflow「设置 → 媒体模型 → 添加供应商」，选择「文件导入」或「粘贴代码」，
-// 保存后点编辑，填入 ComfyUI 服务地址（云 GPU 实例的公网地址，如 http://1.2.3.4:8188）。
+// 保存后点「编辑」，在 API Key 一栏填入 ComfyUI 服务地址（云 GPU 实例的公网地址，如 https://8188-xxx.pod.compshare.cn）。
 // 覆盖模型：
 //   - krea2-t2i：文生图（Krea-2-Turbo，两段式采样）
 //   - qwen-image-edit-i2i：图生图/图像编辑（Qwen-Image-Edit 2511 + Lightning LoRA，最多 3 张参考图）
@@ -17,7 +17,7 @@ const rules = [
   },
 ] as const;
 
-const version = "1.0.0";
+const version = "1.0.1";
 
 // ===== 内嵌工作流（ComfyUI API 格式）=====
 const t2iWorkflow = {"223":{"inputs":{"unet_name":"Krea-2-Turbo/turbo.safetensors","weight_dtype":"default"},"class_type":"UNETLoader","_meta":{"title":"UNet加载器"}},"225":{"inputs":{"aspect_ratio":"original","proportional_width":1,"proportional_height":1,"fit":"crop","method":"bicubic","round_to_multiple":"16","scale_to_side":"longest","scale_to_length":2048,"background_color":"#000000","image":["240",0]},"class_type":"LayerUtility: ImageScaleByAspectRatio V2","_meta":{"title":"图层工具：按宽高比缩放 V2"}},"226":{"inputs":{"samples":["239",0],"vae":["242",2]},"class_type":"VAEDecode","_meta":{"title":"VAE解码"}},"227":{"inputs":{"anything":["226",0]},"class_type":"easy cleanGpuUsed","_meta":{"title":"清理显存占用"}},"228":{"inputs":{"pixels":["225",0],"vae":["242",2]},"class_type":"VAEEncode","_meta":{"title":"VAE编码"}},"229":{"inputs":{"vae_name":"qwen_image_vae.safetensors"},"class_type":"VAELoader","_meta":{"title":"加载VAE"}},"231":{"inputs":{"conditioning":["237",0]},"class_type":"ConditioningZeroOut","_meta":{"title":"条件零化"}},"232":{"inputs":{"conditioning":["233",0]},"class_type":"ConditioningZeroOut","_meta":{"title":"条件零化"}},"233":{"inputs":{"text":["287",0],"clip":["242",1]},"class_type":"CLIPTextEncode","_meta":{"title":"CLIP文本编码"}},"235":{"inputs":{"shift":5,"model":["242",0]},"class_type":"ModelSamplingAuraFlow","_meta":{"title":"采样算法（AuraFlow）"}},"236":{"inputs":{"shift":3.0000000000000004,"model":["223",0]},"class_type":"ModelSamplingAuraFlow","_meta":{"title":"采样算法（AuraFlow）"}},"237":{"inputs":{"text":["287",0],"clip":["291",0]},"class_type":"CLIPTextEncode","_meta":{"title":"CLIP文本编码"}},"238":{"inputs":{"add_noise":"enable","noise_seed":432132807139056,"steps":8,"cfg":1,"sampler_name":"euler","scheduler":"simple","start_at_step":0,"end_at_step":10000,"return_with_leftover_noise":"disable","model":["236",0],"positive":["237",0],"negative":["231",0],"latent_image":["288",0]},"class_type":"KSamplerAdvanced","_meta":{"title":"K采样器（高级）"}},"239":{"inputs":{"add_noise":"enable","noise_seed":618575956236946,"steps":10,"cfg":1,"sampler_name":"euler","scheduler":"simple","start_at_step":6,"end_at_step":10000,"return_with_leftover_noise":"disable","model":["235",0],"positive":["233",0],"negative":["232",0],"latent_image":["228",0]},"class_type":"KSamplerAdvanced","_meta":{"title":"K采样器（高级）"}},"240":{"inputs":{"samples":["238",0],"vae":["229",0]},"class_type":"VAEDecode","_meta":{"title":"VAE解码"}},"242":{"inputs":{"ckpt_name":"z-image-turbo-bf16-aio.safetensors"},"class_type":"CheckpointLoaderSimple","_meta":{"title":"Checkpoint加载器（简易）"}},"268":{"inputs":{"filename_prefix":"ComfyUI","images":["226",0]},"class_type":"SaveImage","_meta":{"title":"保存图像"}},"274":{"inputs":{"filename_prefix":"ComfyUI","images":["240",0]},"class_type":"SaveImage","_meta":{"title":"保存图像"}},"287":{"inputs":{"text":"Chinese manhua style illustration, a young woman in flowing cyan hanfu with a high ponytail, standing on an ancient stone bridge over misty water at dawn, willow branches swaying gently, soft morning light, delicate linework, cinematic composition, highly detailed\nNegative: blurry, low quality, deformed hands, extra fingers, watermark"},"class_type":"LayerUtility: TextBox","_meta":{"title":"图层工具：文本框"}},"288":{"inputs":{"width":720,"height":1280,"batch_size":1},"class_type":"EmptyLatentImage","_meta":{"title":"空Latent图像"}},"291":{"inputs":{"clip_name":"qwen3vl_4b_fp8_scaled.safetensors","type":"krea2","device":"default"},"class_type":"CLIPLoader","_meta":{"title":"加载CLIP"}}};
@@ -45,8 +45,10 @@ function wait(signal: AbortSignal, ms: number): Promise<void> {
 }
 
 function baseOf(config: Record<string, unknown>): string {
-  const raw = String(config.baseUrl ?? "").trim().replace(/\/+$/, "");
-  if (!raw) throw new Error("请先在供应商配置中填写 ComfyUI 服务地址");
+  // ACT: 当前 ToonFlow 的供应商编辑框只暴露一个 "API Key" 输入（存为 config.apiKey），
+  // 自定义 rules 字段在该版本 UI 上不渲染；因此优先读取用户实际能填到的 apiKey。
+  const raw = String(config.apiKey || config.baseUrl || "").trim().replace(/\/+$/, "");
+  if (!raw) throw new Error("请先在供应商编辑页的 API Key 中填写 ComfyUI 服务地址");
   if (!/^https?:\/\//i.test(raw)) throw new Error(`ComfyUI 服务地址格式无效：${raw}`);
   return raw;
 }
