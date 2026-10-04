@@ -3,8 +3,8 @@
 // 保存后点编辑，填入 ComfyUI 服务地址（云 GPU 实例的公网地址，如 http://1.2.3.4:8188）。
 // 覆盖模型：
 //   - minimax-h3-t2v：文生视频（MiniMax-H3）
-//   - minimax-h3-i2v：图生视频（MiniMax-H3 参考图模式，单张首帧，9:16）
-//   - minimax-h3-r2v：参考生视频（MiniMax-H3 多参考图模式，最多 5 张，16:9）
+//   - minimax-h3-i2v：图生视频（MiniMax-H3 参考图模式，1～3 张参考图，比例可选 9:16 / 16:9）
+//   - minimax-h3-r2v：参考生视频（MiniMax-H3 多参考图模式，最多 5 张，比例可选 9:16 / 16:9）
 // 调用协议（标准 ComfyUI HTTP API）：
 //   POST {baseUrl}/prompt 提交 API 格式工作流 → 轮询 GET {baseUrl}/history/{promptId}
 //   → 经 GET {baseUrl}/view 下载 mp4；参考图经 POST {baseUrl}/upload/image 上传。
@@ -18,7 +18,7 @@ const rules = [
   },
 ] as const;
 
-const version = "1.0.0";
+const version = "1.1.0";
 
 // ===== 内嵌工作流（ComfyUI API 格式）=====
 const t2vWorkflow = {"4":{"inputs":{"clip_name":"qwen3vl_32b_minimax_h3_int8_convrot.safetensors","type":"minimax","device":"default"},"class_type":"CLIPLoader","_meta":{"title":"加载CLIP"}},"5":{"inputs":{"vae_name":"minimax_h3_video_vae_fp16.safetensors"},"class_type":"VAELoader","_meta":{"title":"加载VAE"}},"6":{"inputs":{"vae_name":"minimax_h3_audio_vae_fp32.safetensors"},"class_type":"VAELoader","_meta":{"title":"加载VAE"}},"8":{"inputs":{"unet_name":"minimax_h3_fl2va_pruned_int8_convrot.safetensors","weight_dtype":"default"},"class_type":"UNETLoader","_meta":{"title":"UNet加载器"}},"22":{"inputs":{"expression":"max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17","values.a":["27",0]},"class_type":"ComfyMathExpression","_meta":{"title":"数学表达式"}},"23":{"inputs":{"aspect_ratio":"16:9 (Widescreen)","megapixels":0.7,"multiple":32},"class_type":"ResolutionSelector","_meta":{"title":"分辨率选择器"}},"24":{"inputs":{"prompt":["335",0],"width":["23",0],"height":["23",1],"length":["22",1],"clip":["4",0],"vae":["5",0]},"class_type":"MiniMaxH3ImageToVideo","_meta":{"title":"MiniMax H3 Image to Video"}},"26":{"inputs":{"frame_rate":24,"loop_count":0,"filename_prefix":"H3_T2V","format":"video/h264-mp4","pix_fmt":"yuv420p10le","crf":19,"save_metadata":false,"trim_to_audio":false,"pingpong":false,"save_output":true,"images":["334",0],"audio":["332",0]},"class_type":"VHS_VideoCombine","_meta":{"title":"Video Combine 🎥🅥🅗🅢"}},"27":{"inputs":{"value":12},"class_type":"PrimitiveFloat","_meta":{"title":"视频时长（秒）"}},"186":{"inputs":{"lora_name":"minimax_h3_turbo_v4_step600_ema.safetensors","strength_model":1.0000000000000002,"model":["8",0]},"class_type":"LoraLoaderModelOnly","_meta":{"title":"LoRA加载器（仅模型）"}},"227":{"inputs":{"noise":["228",0],"guider":["230",0],"sampler":["231",0],"sigmas":["232",0],"latent_image":["24",1]},"class_type":"SamplerCustomAdvanced","_meta":{"title":"自定义采样器（高级）"}},"228":{"inputs":{"noise_seed":932733980357873},"class_type":"RandomNoise","_meta":{"title":"随机噪波"}},"230":{"inputs":{"model":["186",0],"conditioning":["24",0]},"class_type":"BasicGuider","_meta":{"title":"基本引导器"}},"231":{"inputs":{"sampler_name":"euler"},"class_type":"KSamplerSelect","_meta":{"title":"K采样器选择"}},"232":{"inputs":{"scheduler":"beta","steps":6,"denoise":1,"model":["186",0]},"class_type":"BasicScheduler","_meta":{"title":"基本调度器"}},"332":{"inputs":{"samples":["227",0],"vae":["6",0]},"class_type":"VAEDecodeAudio","_meta":{"title":"VAE解码（音频）"}},"333":{"inputs":{"samples":["227",0],"vae":["5",0]},"class_type":"VAEDecode","_meta":{"title":"VAE解码"}},"334":{"inputs":{"anything":["333",0]},"class_type":"easy cleanGpuUsed","_meta":{"title":"清理显存占用"}},"335":{"inputs":{"text":"A young woman in flowing cyan hanfu walks slowly across an ancient stone bridge at dawn, willow branches swaying in the breeze, mist drifting over the water, her sleeves fluttering gently, soft morning light, smooth natural motion, cinematic"},"class_type":"LayerUtility: TextBox","_meta":{"title":"图层工具：文本框"}}};
@@ -63,6 +63,17 @@ function nodeOf(wf: Record<string, any>, nodeId: string): Record<string, any> {
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+/** 宽高比 → ResolutionSelector 节点的 aspect_ratio 取值；不在表中的比例保持工作流默认 */
+const resolutionAspectOf: Record<string, string> = {
+  "16:9": "16:9 (Widescreen)",
+  "9:16": "9:16 (Portrait Widescreen)",
+};
+
+function applyAspectRatio(wf: Record<string, any>, nodeId: string, ratio: string | undefined): void {
+  const mapped = ratio ? resolutionAspectOf[String(ratio).trim()] : undefined;
+  if (mapped) nodeOf(wf, nodeId).inputs.aspect_ratio = mapped;
 }
 
 /** MediaInput → 字节 */
@@ -255,7 +266,7 @@ export default {
   label: "ComfyUI 云 GPU（视频）",
   version,
   readme:
-    "## ComfyUI 云 GPU（视频）\n\n把云 GPU 实例上的 ComfyUI 作为 ToonFlow 的视频算力，按工作流直调，不经过第三方模型 API。\n\n- 模型 `minimax-h3-t2v`：文生视频（MiniMax-H3，默认 12 秒）\n- 模型 `minimax-h3-i2v`：图生视频（MiniMax-H3 单参考图模式，9:16）\n- 模型 `minimax-h3-r2v`：参考生视频（MiniMax-H3 多参考图模式，最多 5 张，16:9）\n\n使用前请确认：ComfyUI 已在云 GPU 实例上启动，且 ToonFlow 服务器能访问到上面填写的地址；工作流依赖的模型与自定义节点已在实例上就绪。视频任务约需数分钟，供应商内部会轮询等待。",
+    "## ComfyUI 云 GPU（视频）\n\n把云 GPU 实例上的 ComfyUI 作为 ToonFlow 的视频算力，按工作流直调，不经过第三方模型 API。\n\n- 模型 `minimax-h3-t2v`：文生视频（MiniMax-H3，默认 12 秒）\n- 模型 `minimax-h3-i2v`：图生视频（MiniMax-H3 参考图模式，支持 1～3 张参考图，比例可在 9:16 / 16:9 之间选择）\n- 模型 `minimax-h3-r2v`：参考生视频（MiniMax-H3 多参考图模式，最多 5 张，比例可在 9:16 / 16:9 之间选择）\n\n使用前请确认：ComfyUI 已在云 GPU 实例上启动，且 ToonFlow 服务器能访问到上面填写的地址；工作流依赖的模型与自定义节点已在实例上就绪。视频任务约需数分钟，供应商内部会轮询等待。",
   rules,
   models: [
     {
@@ -267,14 +278,14 @@ export default {
     },
     {
       id: "minimax-h3-i2v",
-      label: "MiniMax-H3 图生视频 9:16（云 GPU）",
+      label: "MiniMax-H3 图生视频（云 GPU）",
       type: "video",
-      mode: ["singleImage"],
+      mode: [["imageReference:3"]],
       durationResolutionMap: [{ duration: [5, 12], resolution: ["768P"] }],
     },
     {
       id: "minimax-h3-r2v",
-      label: "MiniMax-H3 参考生视频 16:9（云 GPU）",
+      label: "MiniMax-H3 参考生视频（云 GPU）",
       type: "video",
       mode: [["imageReference:5"]],
       durationResolutionMap: [{ duration: [5, 12], resolution: ["768P"] }],
@@ -294,12 +305,32 @@ export default {
     }
 
     if (model === "minimax-h3-i2v") {
-      const source = request.images?.[0] ?? request.firstFrame;
-      if (!source) throw new Error("图生视频需要 1 张首帧图片");
+      const images = [...(request.images ?? [])];
+      if (!images.length && request.firstFrame) images.push(request.firstFrame);
+      if (!images.length) throw new Error("图生视频需要 1～3 张参考图");
+      if (images.length > 3) throw new Error("图生视频最多支持 3 张参考图");
       const wf = JSON.parse(JSON.stringify(i2vWorkflow)) as Record<string, any>;
       nodeOf(wf, "333").inputs.text = request.prompt;
-      const { bytes, mime } = await inputBytes(fetchFn, source, signal);
-      nodeOf(wf, "61").inputs.image = await uploadImage(fetchFn, base, bytes, mime, signal);
+      applyAspectRatio(wf, "59", request.ratio);
+      const refNode = nodeOf(wf, "329");
+      for (let index = 0; index < images.length; index++) {
+        const { bytes, mime } = await inputBytes(fetchFn, images[index], signal);
+        const name = await uploadImage(fetchFn, base, bytes, mime, signal);
+        if (index === 0) {
+          nodeOf(wf, "61").inputs.image = name;
+          continue;
+        }
+        // 第 2、3 张参考图：复制 LoadImage（61）+ 按宽高比缩放（63）节点链并接入
+        const loadId = String(900 + index * 2);
+        const scaleId = String(901 + index * 2);
+        const loadNode = JSON.parse(JSON.stringify(nodeOf(wf, "61")));
+        loadNode.inputs.image = name;
+        const scaleNode = JSON.parse(JSON.stringify(nodeOf(wf, "63")));
+        scaleNode.inputs.image = [loadId, 0];
+        wf[loadId] = loadNode;
+        wf[scaleId] = scaleNode;
+        refNode.inputs[`ref_images.ref_image_${index}`] = [scaleId, 0];
+      }
       if (request.duration !== undefined) nodeOf(wf, "58").inputs.value = clampInt(request.duration, 5, 15);
       return runVideoWorkflow(this, base, wf, signal);
     }
@@ -310,6 +341,7 @@ export default {
       if (images.length > 5) throw new Error("参考生视频最多支持 5 张参考图");
       const wf = JSON.parse(JSON.stringify(r2vWorkflow)) as Record<string, any>;
       nodeOf(wf, "333").inputs.text = request.prompt;
+      applyAspectRatio(wf, "105", request.ratio);
       const names: string[] = [];
       for (const image of images) {
         const { bytes, mime } = await inputBytes(fetchFn, image, signal);
