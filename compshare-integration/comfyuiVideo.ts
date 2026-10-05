@@ -18,7 +18,7 @@ const rules = [
   },
 ] as const;
 
-const version = "1.1.1";
+const version = "1.1.2";
 
 // ===== 内嵌工作流（ComfyUI API 格式）=====
 const t2vWorkflow = {"4":{"inputs":{"clip_name":"qwen3vl_32b_minimax_h3_int8_convrot.safetensors","type":"minimax","device":"default"},"class_type":"CLIPLoader","_meta":{"title":"加载CLIP"}},"5":{"inputs":{"vae_name":"minimax_h3_video_vae_fp16.safetensors"},"class_type":"VAELoader","_meta":{"title":"加载VAE"}},"6":{"inputs":{"vae_name":"minimax_h3_audio_vae_fp32.safetensors"},"class_type":"VAELoader","_meta":{"title":"加载VAE"}},"8":{"inputs":{"unet_name":"minimax_h3_fl2va_pruned_int8_convrot.safetensors","weight_dtype":"default"},"class_type":"UNETLoader","_meta":{"title":"UNet加载器"}},"22":{"inputs":{"expression":"max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17","values.a":["27",0]},"class_type":"ComfyMathExpression","_meta":{"title":"数学表达式"}},"23":{"inputs":{"aspect_ratio":"16:9 (Widescreen)","megapixels":0.7,"multiple":32},"class_type":"ResolutionSelector","_meta":{"title":"分辨率选择器"}},"24":{"inputs":{"prompt":["335",0],"width":["23",0],"height":["23",1],"length":["22",1],"clip":["4",0],"vae":["5",0]},"class_type":"MiniMaxH3ImageToVideo","_meta":{"title":"MiniMax H3 Image to Video"}},"26":{"inputs":{"frame_rate":24,"loop_count":0,"filename_prefix":"H3_T2V","format":"video/h264-mp4","pix_fmt":"yuv420p10le","crf":19,"save_metadata":false,"trim_to_audio":false,"pingpong":false,"save_output":true,"images":["334",0],"audio":["332",0]},"class_type":"VHS_VideoCombine","_meta":{"title":"Video Combine 🎥🅥🅗🅢"}},"27":{"inputs":{"value":12},"class_type":"PrimitiveFloat","_meta":{"title":"视频时长（秒）"}},"186":{"inputs":{"lora_name":"minimax_h3_turbo_v4_step600_ema.safetensors","strength_model":1.0000000000000002,"model":["8",0]},"class_type":"LoraLoaderModelOnly","_meta":{"title":"LoRA加载器（仅模型）"}},"227":{"inputs":{"noise":["228",0],"guider":["230",0],"sampler":["231",0],"sigmas":["232",0],"latent_image":["24",1]},"class_type":"SamplerCustomAdvanced","_meta":{"title":"自定义采样器（高级）"}},"228":{"inputs":{"noise_seed":932733980357873},"class_type":"RandomNoise","_meta":{"title":"随机噪波"}},"230":{"inputs":{"model":["186",0],"conditioning":["24",0]},"class_type":"BasicGuider","_meta":{"title":"基本引导器"}},"231":{"inputs":{"sampler_name":"euler"},"class_type":"KSamplerSelect","_meta":{"title":"K采样器选择"}},"232":{"inputs":{"scheduler":"beta","steps":6,"denoise":1,"model":["186",0]},"class_type":"BasicScheduler","_meta":{"title":"基本调度器"}},"332":{"inputs":{"samples":["227",0],"vae":["6",0]},"class_type":"VAEDecodeAudio","_meta":{"title":"VAE解码（音频）"}},"333":{"inputs":{"samples":["227",0],"vae":["5",0]},"class_type":"VAEDecode","_meta":{"title":"VAE解码"}},"334":{"inputs":{"anything":["333",0]},"class_type":"easy cleanGpuUsed","_meta":{"title":"清理显存占用"}},"335":{"inputs":{"text":"A young woman in flowing cyan hanfu walks slowly across an ancient stone bridge at dawn, willow branches swaying in the breeze, mist drifting over the water, her sleeves fluttering gently, soft morning light, smooth natural motion, cinematic"},"class_type":"LayerUtility: TextBox","_meta":{"title":"图层工具：文本框"}}};
@@ -276,21 +276,21 @@ export default {
       label: "MiniMax-H3 文生视频（云 GPU）",
       type: "video",
       mode: ["text"],
-      durationResolutionMap: [{ duration: [5, 12], resolution: ["768P"] }],
+      durationResolutionMap: [{ duration: [5, 6, 7, 8, 9, 10, 11, 12], resolution: ["768P"] }],
     },
     {
       id: "minimax-h3-i2v",
       label: "MiniMax-H3 图生视频（云 GPU）",
       type: "video",
       mode: [["imageReference:3"]],
-      durationResolutionMap: [{ duration: [5, 12], resolution: ["768P"] }],
+      durationResolutionMap: [{ duration: [5, 6, 7, 8, 9, 10, 11, 12], resolution: ["768P"] }],
     },
     {
       id: "minimax-h3-r2v",
       label: "MiniMax-H3 参考生视频（云 GPU）",
       type: "video",
       mode: [["imageReference:5"]],
-      durationResolutionMap: [{ duration: [5, 12], resolution: ["768P"] }],
+      durationResolutionMap: [{ duration: [5, 6, 7, 8, 9, 10, 11, 12], resolution: ["768P"] }],
     },
   ] satisfies ProviderModel[],
   async generateVideo(request: VideoRequest): Promise<MediaAsset[]> {
