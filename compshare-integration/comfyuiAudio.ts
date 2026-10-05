@@ -6,7 +6,7 @@
 //   - qwen3-tts-dialogue：多角色对话（Qwen3-TTS 声音克隆模式，每个角色提供 1 段参考音频，最多 6 个角色）
 // 调用协议（标准 ComfyUI HTTP API）：
 //   POST {baseUrl}/prompt 提交 API 格式工作流 → 轮询 GET {baseUrl}/history/{prompt_id}
-//   → 经 GET {baseUrl}/view 下载音频；参考音频经 POST {baseUrl}/upload/audio 上传。
+//   → 经 GET {baseUrl}/view 下载音频；参考音频经 POST {baseUrl}/upload/image 上传（旧版 ComfyUI 无 /upload/audio 路由）。
 const rules = [
   {
     type: "input",
@@ -17,7 +17,7 @@ const rules = [
   },
 ] as const;
 
-const version = "1.0.0";
+const version = "1.0.1";
 
 // ===== 内嵌工作流（ComfyUI API 格式）=====
 const narrationWorkflow = {"2":{"inputs":{"模型名称":"Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign","运行设备":"cuda","精度":"fp16"},"class_type":"Qwen3TTSModelLoader","_meta":{"title":"Qwen3 TTS 模型加载"}},"3":{"inputs":{"filename_prefix":"audio/ComfyUI","audio":["4",0]},"class_type":"SaveAudio","_meta":{"title":"保存音频"}},"4":{"inputs":{"文本":["11",0],"提示词":["10",0],"语言":"自动","自动卸载模型":false,"最大生成Token数":2048,"seed":83057147840400,"语速":1,"批量模式":false,"top_p":0.8,"top_k":50,"temperature":0.8,"repetition_penalty":1.1,"启用高级采样配置":false,"模型":["2",0]},"class_type":"Qwen3TTSVoiceDesign","_meta":{"title":"Qwen3 TTS 声音设计"}},"10":{"inputs":{"text":"年轻女声，语气具有仙侠气质。"},"class_type":"LayerUtility: TextBox","_meta":{"title":"音色描述"}},"11":{"inputs":{"text":"真正失败的人，就是那种特别害怕不能成功 怕死了，连试都不敢试的人"},"class_type":"LayerUtility: TextBox","_meta":{"title":"文本内容"}}};
@@ -115,13 +115,16 @@ async function uploadAudio(
   mime: string,
   signal: AbortSignal,
 ): Promise<string> {
+  // ACT: 部分旧版 ComfyUI 没有 /upload/audio 路由（POST 返回 405），但 /upload/image
+  // 同样把文件存入 input 目录且不校验内容，LoadAudio 可直接引用；因此统一走 /upload/image。
+  // 已在 2026-10-05 的 Bob同学镜像（v1.93）上实测：/upload/audio → 405，/upload/image 传 wav → 200。
   const boundary = `----ToonflowForm${Date.now()}${Math.floor(Math.random() * 1e9)}`;
   const filename = `toonflow_${Date.now()}_${Math.floor(Math.random() * 1e6)}.${extOf(mime)}`;
   const head = Buffer.from(
-    `--${boundary}\r\nContent-Disposition: form-data; name="audio"; filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`,
+    `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`,
   );
   const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
-  const response = await fetchFn(`${base}/upload/audio`, {
+  const response = await fetchFn(`${base}/upload/image`, {
     method: "POST",
     headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
     body: Buffer.concat([head, Buffer.from(bytes), tail]),
@@ -133,7 +136,7 @@ async function uploadAudio(
   }
   const payload = object(await response.json());
   const name = payload.name;
-  if (typeof name !== "string" || !name) throw new Error("ComfyUI /upload/audio 未返回文件名");
+  if (typeof name !== "string" || !name) throw new Error("ComfyUI /upload/image 未返回文件名");
   return name;
 }
 
