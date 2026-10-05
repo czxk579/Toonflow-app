@@ -17,7 +17,7 @@ const rules = [
   },
 ] as const;
 
-const version = "1.0.1";
+const version = "1.0.2";
 
 // ===== 内嵌工作流（ComfyUI API 格式）=====
 const t2iWorkflow = {"223":{"inputs":{"unet_name":"Krea-2-Turbo/turbo.safetensors","weight_dtype":"default"},"class_type":"UNETLoader","_meta":{"title":"UNet加载器"}},"225":{"inputs":{"aspect_ratio":"original","proportional_width":1,"proportional_height":1,"fit":"crop","method":"bicubic","round_to_multiple":"16","scale_to_side":"longest","scale_to_length":2048,"background_color":"#000000","image":["240",0]},"class_type":"LayerUtility: ImageScaleByAspectRatio V2","_meta":{"title":"图层工具：按宽高比缩放 V2"}},"226":{"inputs":{"samples":["239",0],"vae":["242",2]},"class_type":"VAEDecode","_meta":{"title":"VAE解码"}},"227":{"inputs":{"anything":["226",0]},"class_type":"easy cleanGpuUsed","_meta":{"title":"清理显存占用"}},"228":{"inputs":{"pixels":["225",0],"vae":["242",2]},"class_type":"VAEEncode","_meta":{"title":"VAE编码"}},"229":{"inputs":{"vae_name":"qwen_image_vae.safetensors"},"class_type":"VAELoader","_meta":{"title":"加载VAE"}},"231":{"inputs":{"conditioning":["237",0]},"class_type":"ConditioningZeroOut","_meta":{"title":"条件零化"}},"232":{"inputs":{"conditioning":["233",0]},"class_type":"ConditioningZeroOut","_meta":{"title":"条件零化"}},"233":{"inputs":{"text":["287",0],"clip":["242",1]},"class_type":"CLIPTextEncode","_meta":{"title":"CLIP文本编码"}},"235":{"inputs":{"shift":5,"model":["242",0]},"class_type":"ModelSamplingAuraFlow","_meta":{"title":"采样算法（AuraFlow）"}},"236":{"inputs":{"shift":3.0000000000000004,"model":["223",0]},"class_type":"ModelSamplingAuraFlow","_meta":{"title":"采样算法（AuraFlow）"}},"237":{"inputs":{"text":["287",0],"clip":["291",0]},"class_type":"CLIPTextEncode","_meta":{"title":"CLIP文本编码"}},"238":{"inputs":{"add_noise":"enable","noise_seed":432132807139056,"steps":8,"cfg":1,"sampler_name":"euler","scheduler":"simple","start_at_step":0,"end_at_step":10000,"return_with_leftover_noise":"disable","model":["236",0],"positive":["237",0],"negative":["231",0],"latent_image":["288",0]},"class_type":"KSamplerAdvanced","_meta":{"title":"K采样器（高级）"}},"239":{"inputs":{"add_noise":"enable","noise_seed":618575956236946,"steps":10,"cfg":1,"sampler_name":"euler","scheduler":"simple","start_at_step":6,"end_at_step":10000,"return_with_leftover_noise":"disable","model":["235",0],"positive":["233",0],"negative":["232",0],"latent_image":["228",0]},"class_type":"KSamplerAdvanced","_meta":{"title":"K采样器（高级）"}},"240":{"inputs":{"samples":["238",0],"vae":["229",0]},"class_type":"VAEDecode","_meta":{"title":"VAE解码"}},"242":{"inputs":{"ckpt_name":"z-image-turbo-bf16-aio.safetensors"},"class_type":"CheckpointLoaderSimple","_meta":{"title":"Checkpoint加载器（简易）"}},"268":{"inputs":{"filename_prefix":"ComfyUI","images":["226",0]},"class_type":"SaveImage","_meta":{"title":"保存图像"}},"274":{"inputs":{"filename_prefix":"ComfyUI","images":["240",0]},"class_type":"SaveImage","_meta":{"title":"保存图像"}},"287":{"inputs":{"text":"Chinese manhua style illustration, a young woman in flowing cyan hanfu with a high ponytail, standing on an ancient stone bridge over misty water at dawn, willow branches swaying gently, soft morning light, delicate linework, cinematic composition, highly detailed\nNegative: blurry, low quality, deformed hands, extra fingers, watermark"},"class_type":"LayerUtility: TextBox","_meta":{"title":"图层工具：文本框"}},"288":{"inputs":{"width":720,"height":1280,"batch_size":1},"class_type":"EmptyLatentImage","_meta":{"title":"空Latent图像"}},"291":{"inputs":{"clip_name":"qwen3vl_4b_fp8_scaled.safetensors","type":"krea2","device":"default"},"class_type":"CLIPLoader","_meta":{"title":"加载CLIP"}}};
@@ -156,6 +156,11 @@ async function interruptQuietly(fetchFn: typeof fetch, base: string): Promise<vo
 }
 
 /** 轮询直到产出就绪，返回 history.outputs；取消时尝试中断远端任务 */
+/** 轮询直到产出就绪，返回 history.outputs。
+ *  - 502/503/504 视为网关抖动，在 5 分钟预算内重试等待恢复，绝不因此中断远端任务。
+ *  - 只有用户主动取消时才调用 /interrupt（它是全局中断，会杀掉服务端正在跑的任务）。
+ *    2026-10-05 实测教训：网关抖动导致轮询 502，旧逻辑的无条件 /interrupt
+ *    把三个正在采样中的视频任务全杀掉了（服务端记录为 execution_interrupted）。 */
 async function waitOutputs(
   fetchFn: typeof fetch,
   base: string,
@@ -163,11 +168,40 @@ async function waitOutputs(
   signal: AbortSignal,
   intervalMs = 5000,
 ): Promise<Record<string, unknown>> {
+  const transientStatus = new Set([502, 503, 504]);
+  const maxUnstableMs = 5 * 60_000;
+  let unstableSince = 0;
+  const noteUnstable = () => {
+    const now = Date.now();
+    if (!unstableSince) unstableSince = now;
+    if (now - unstableSince > maxUnstableMs) {
+      throw new Error(
+        `ComfyUI 服务端持续无响应（${promptId}）：网关多次返回 502/503/504，` +
+          "可能是实例重启或链路抖动；任务状态未知，请在 ComfyUI 页面确认后再决定是否重提",
+      );
+    }
+  };
   try {
     while (true) {
       signal.throwIfAborted();
-      const response = await fetchFn(`${base}/history/${encodeURIComponent(promptId)}`, { signal });
-      if (!response.ok) throw new Error(`ComfyUI 查询任务失败：HTTP ${response.status}（${promptId}）`);
+      let response: Response;
+      try {
+        response = await fetchFn(`${base}/history/${encodeURIComponent(promptId)}`, { signal });
+      } catch (err) {
+        if (signal.aborted) throw err;
+        noteUnstable();
+        await wait(signal, intervalMs);
+        continue;
+      }
+      if (!response.ok) {
+        if (transientStatus.has(response.status)) {
+          noteUnstable();
+          await wait(signal, intervalMs);
+          continue;
+        }
+        throw new Error(`ComfyUI 查询任务失败：HTTP ${response.status}（${promptId}）`);
+      }
+      unstableSince = 0;
       const history = object(await response.json());
       const rawEntry = history[promptId];
       if (rawEntry) {
@@ -183,7 +217,9 @@ async function waitOutputs(
       await wait(signal, intervalMs);
     }
   } catch (err) {
-    await interruptQuietly(fetchFn, base);
+    // ACT: /interrupt 是全局中断；只有用户明确取消才调用，传输抖动绝不中断，避免误杀正常任务。
+    const aborted = signal.aborted || (err instanceof Error && err.name === "AbortError");
+    if (aborted) await interruptQuietly(fetchFn, base);
     throw err;
   }
 }

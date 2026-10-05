@@ -17,7 +17,7 @@ const rules = [
   },
 ] as const;
 
-const version = "1.0.1";
+const version = "1.0.2";
 
 // ===== 内嵌工作流（ComfyUI API 格式）=====
 const narrationWorkflow = {"2":{"inputs":{"模型名称":"Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign","运行设备":"cuda","精度":"fp16"},"class_type":"Qwen3TTSModelLoader","_meta":{"title":"Qwen3 TTS 模型加载"}},"3":{"inputs":{"filename_prefix":"audio/ComfyUI","audio":["4",0]},"class_type":"SaveAudio","_meta":{"title":"保存音频"}},"4":{"inputs":{"文本":["11",0],"提示词":["10",0],"语言":"自动","自动卸载模型":false,"最大生成Token数":2048,"seed":83057147840400,"语速":1,"批量模式":false,"top_p":0.8,"top_k":50,"temperature":0.8,"repetition_penalty":1.1,"启用高级采样配置":false,"模型":["2",0]},"class_type":"Qwen3TTSVoiceDesign","_meta":{"title":"Qwen3 TTS 声音设计"}},"10":{"inputs":{"text":"年轻女声，语气具有仙侠气质。"},"class_type":"LayerUtility: TextBox","_meta":{"title":"音色描述"}},"11":{"inputs":{"text":"真正失败的人，就是那种特别害怕不能成功 怕死了，连试都不敢试的人"},"class_type":"LayerUtility: TextBox","_meta":{"title":"文本内容"}}};
@@ -178,6 +178,11 @@ async function interruptQuietly(fetchFn: typeof fetch, base: string): Promise<vo
 }
 
 /** 轮询直到产出就绪，返回 history.outputs；取消时尝试中断远端任务 */
+/** 轮询直到产出就绪，返回 history.outputs。
+ *  - 502/503/504 视为网关抖动，在 5 分钟预算内重试等待恢复，绝不因此中断远端任务。
+ *  - 只有用户主动取消时才调用 /interrupt（它是全局中断，会杀掉服务端正在跑的任务）。
+ *    2026-10-05 实测教训：网关抖动导致轮询 502，旧逻辑的无条件 /interrupt
+ *    把三个正在采样中的视频任务全杀掉了（服务端记录为 execution_interrupted）。 */
 async function waitOutputs(
   fetchFn: typeof fetch,
   base: string,
@@ -185,11 +190,40 @@ async function waitOutputs(
   signal: AbortSignal,
   intervalMs = 5000,
 ): Promise<Record<string, unknown>> {
+  const transientStatus = new Set([502, 503, 504]);
+  const maxUnstableMs = 5 * 60_000;
+  let unstableSince = 0;
+  const noteUnstable = () => {
+    const now = Date.now();
+    if (!unstableSince) unstableSince = now;
+    if (now - unstableSince > maxUnstableMs) {
+      throw new Error(
+        `ComfyUI 服务端持续无响应（${promptId}）：网关多次返回 502/503/504，` +
+          "可能是实例重启或链路抖动；任务状态未知，请在 ComfyUI 页面确认后再决定是否重提",
+      );
+    }
+  };
   try {
     while (true) {
       signal.throwIfAborted();
-      const response = await fetchFn(`${base}/history/${encodeURIComponent(promptId)}`, { signal });
-      if (!response.ok) throw new Error(`ComfyUI 查询任务失败：HTTP ${response.status}（${promptId}）`);
+      let response: Response;
+      try {
+        response = await fetchFn(`${base}/history/${encodeURIComponent(promptId)}`, { signal });
+      } catch (err) {
+        if (signal.aborted) throw err;
+        noteUnstable();
+        await wait(signal, intervalMs);
+        continue;
+      }
+      if (!response.ok) {
+        if (transientStatus.has(response.status)) {
+          noteUnstable();
+          await wait(signal, intervalMs);
+          continue;
+        }
+        throw new Error(`ComfyUI 查询任务失败：HTTP ${response.status}（${promptId}）`);
+      }
+      unstableSince = 0;
       const history = object(await response.json());
       const rawEntry = history[promptId];
       if (rawEntry) {
@@ -205,7 +239,9 @@ async function waitOutputs(
       await wait(signal, intervalMs);
     }
   } catch (err) {
-    await interruptQuietly(fetchFn, base);
+    // ACT: /interrupt 是全局中断；只有用户明确取消才调用，传输抖动绝不中断，避免误杀正常任务。
+    const aborted = signal.aborted || (err instanceof Error && err.name === "AbortError");
+    if (aborted) await interruptQuietly(fetchFn, base);
     throw err;
   }
 }
