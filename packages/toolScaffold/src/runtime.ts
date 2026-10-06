@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Rule } from "@form-create/element-ui";
 import type { FfmpegFactory } from "@toonflow/ffmpeg/types";
+import type { Stats } from "@toonflow/file";
 import { z } from "zod";
 
 export type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -49,7 +50,9 @@ export interface NodeToolCall {
 }
 
 export interface NodeToolsContext {
-  tools: NodeToolInfo[];
+  readonly tools: NodeToolInfo[];
+  readonly version: number;
+  list(nodeIds: string[], names?: string[]): IterableIterator<NodeToolInfo>;
   call(request: NodeToolCall, signal?: AbortSignal): Promise<unknown>;
 }
 
@@ -105,6 +108,8 @@ export interface MediaGenerationRequest {
   voice?: string;
   speed?: number;
   volume?: number;
+  pitch?: number;
+  language?: string;
   format?: string;
   sampleRate?: number;
   mode?: "singleImage" | "startEndRequired" | "endFrameOptional" | "startFrameOptional" | "text"
@@ -170,6 +175,19 @@ export interface SkillContext {
   update(request: SkillLocation & { content: string }, signal?: AbortSignal): Promise<Omit<SkillDocument, "content">>;
 }
 
+export interface ToolFiles {
+  readFile(path: string, readOnly?: boolean): Promise<Buffer>;
+  access(path: string, readOnly?: boolean): Promise<void>;
+  stat(path: string, readOnly?: boolean): Promise<Stats>;
+  readdir(path: string, readOnly?: boolean): Promise<string[]>;
+  detectImageMimeType(path: string, readOnly?: boolean): Promise<string | null>;
+  writeFile(path: string, content: string | Uint8Array, exclusive?: boolean): Promise<void>;
+  mkdir(path: string, recursive?: boolean): Promise<void>;
+  rename(path: string, target: string): Promise<void>;
+  remove(path: string, recursive?: boolean): Promise<void>;
+  copyFile(path: string, target: string, exclusive?: boolean): Promise<void>;
+}
+
 export interface ToolContext {
   ffmpeg(signal?: AbortSignal): Promise<FfmpegFactory>;
   media?: MediaContext;
@@ -178,6 +196,7 @@ export interface ToolContext {
   skills?: SkillContext;
   cwd: string;
   config: Record<string, unknown>;
+  files: ToolFiles;
   resolvePath(path: string, readOnly?: boolean): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
   sdk: Pick<typeof import("@earendil-works/pi-coding-agent"),

@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { t } from "@/lib/i18n";
+import { readFile } from "@toonflow/file";
 import { join } from "node:path";
 import { DefaultResourceLoader, SettingsManager, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { buildSystemPrompt } from "@/agent/runtime/prompt";
@@ -14,7 +15,7 @@ export async function createAgentResources(cwd: string, tools: ToolDefinition[],
   const { path: agentsPath } = await resolveWorkspacePath(cwd, "AGENTS.md");
   const agentsContent = await readFile(agentsPath, "utf8").catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return "";
-    throw new Error(`读取工作区 AGENTS.md 失败：${error.message}`, { cause: error });
+    throw new Error(t`读取工作区 AGENTS.md 失败：${error.message}`, { cause: error });
   });
   const [globalAgents, memory] = await Promise.all([readDocument("agents"), isMemoryEnabled() ? readDocument("memory") : { content: "" }]);
   const skills = loadAgentSkills(cwd);

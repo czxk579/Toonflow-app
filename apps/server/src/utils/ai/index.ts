@@ -9,6 +9,7 @@ import { readReference } from "@/utils/media/generation";
 import modelContextLimits from "@/utils/ai/modelContextLimits";
 
 export { fetchProviderModels } from "@/utils/ai/models";
+export { refreshProviderModels } from "@/utils/ai/initialize";
 
 export const providerSchema = z.object({
   apiUrl: z.url({ protocol: /^https?$/ }),

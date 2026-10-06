@@ -29,15 +29,19 @@
             </svg>
           </span>
           <el-card class="promptCard" shadow="never" :bodyStyle="{ padding: '20px' }" :footerStyle="{ padding: '12px 16px' }">
-            <el-input v-model="prompt" type="textarea" :rows="4" resize="none" :disabled="creating || opening" :placeholder="promptPlaceholder" aria-label="创作描述" />
+            <attachmentList v-if="promptAttachments.length" class="promptAttachments" :attachments="promptAttachments" removable restorable :disabled="creating || opening" @remove="promptAttachments.splice($event, 1)" @restore="restoreAttachment" />
+            <el-input ref="promptInput" v-model="prompt" type="textarea" :rows="4" resize="none" :disabled="creating || opening" :placeholder="promptPlaceholder" aria-label="创作描述" @paste.capture="pasteText" />
             <template #footer>
               <div class="composerFooter">
-                <workspacePicker v-model="workspaceDirectory" :disabled="creating || opening" />
-                <el-space class="sendActions" :size="12">
+                <workspacePicker ref="promptWorkspacePicker" v-model="workspaceDirectory" :disabled="creating || opening" />
+                <el-space class="sendActions" wrap :size="12">
                   <modelPopover v-model="selectedModel" v-model:reasoningEffort="reasoningEffort" class="modelSelect" :disabled="creating || opening" />
-                  <el-button class="sendButton" type="primary" circle :icon="IconArrowUp" :loading="creating" :disabled="creating || opening || !workspaceDirectory" aria-label="发送" @click="createProject()" />
+                  <el-button class="sendButton" type="primary" :circle="!!workspaceDirectory" :icon="workspaceDirectory ? IconArrowUp : IconFolder" :loading="creating" :disabled="creating || opening" :aria-label="workspaceDirectory ? '发送' : '选择工作目录'" @click="workspaceDirectory ? createProject() : promptWorkspacePicker?.chooseDirectory()">
+                    <template v-if="!workspaceDirectory" #default>选择工作目录</template>
+                  </el-button>
                 </el-space>
               </div>
+              <p v-if="!workspaceDirectory" class="workspaceHint" role="status">请先选择一个空文件夹作为工作目录，画布和素材会保存在这里。</p>
             </template>
           </el-card>
         </div>
@@ -62,7 +66,7 @@
               <span class="projectInfo">
                 <span class="projectName" :title="project.name">{{ project.name }}</span>
                 <span class="projectPath" :title="project.directory">{{ project.directory }}</span>
-                <span class="projectTime">最近打开 {{ new Date(project.lastOpenedAt).toLocaleString('zh-CN', { hour12: false }) }}</span>
+                <span class="projectTime">最近打开 {{ new Date(project.lastOpenedAt).toLocaleString(locale, { hour12: false }) }}</span>
               </span>
             </button>
             <div class="projectActions">
@@ -79,11 +83,12 @@
 </template>
 
 <script setup lang="ts">
+import { locale, translate } from "@toonflow/i18n/vue";
 import axios from "axios";
 import { storeToRefs } from "pinia";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox, type InputInstance } from "element-plus";
 import {
   IconSettings, IconBrandGithub,
   IconArrowUp, IconLayoutGrid,
@@ -92,6 +97,9 @@ import {
   IconTrash, IconFolderPlus, IconFolderOpen as iconFolderOpen,
 } from "@tabler/icons-vue";
 import modelPopover from "@/components/modelPopover.vue";
+import attachmentList from "@/components/agent/attachmentList.vue";
+import { createPastedTextFile, readTextAttachment } from "@/components/agent/textAttachments";
+import type { AgentAttachment } from "@/components/agent/types";
 import logoUrl from "@toonflow/assets/logo.svg";
 import { useWorkspaceStore, type Project } from "@/stores/workspace";
 import { hasDesktopUpdate } from "@/stores/desktopUpdate";
@@ -104,8 +112,11 @@ const settingsVisible = ref(false);
 const router = useRouter();
 const creating = ref(false);
 const opening = ref(false);
+const promptWorkspacePicker = ref<InstanceType<typeof workspacePicker>>();
 const relocationPicker = ref<InstanceType<typeof workspacePicker>>();
 const prompt = ref("");
+const promptInput = ref<InputInstance>();
+const promptAttachments = ref<AgentAttachment[]>([]);
 const workspaceStore = useWorkspaceStore();
 const { project, projectList } = storeToRefs(workspaceStore);
 const workspaceDirectory = ref(project.value?.directory ?? "");
@@ -121,22 +132,28 @@ const placeholderPhrases = [
   "设计一支富有想象力的产品宣传片…",
   "从一句话开始，搭建你的创作工作流…",
 ];
-const promptPlaceholder = ref(placeholderPhrases[0]!);
+const promptPlaceholder = ref(translate(placeholderPhrases[0]!));
 
 onMounted(() => {
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let phraseIndex = 0;
-  watch(() => !!prompt.value, (hasInput, _previous, onCleanup) => {
+  watch([() => !!prompt.value, locale], ([hasInput], _previous, onCleanup) => {
+    if (reduceMotion) {
+      promptPlaceholder.value = translate(placeholderPhrases[0]!);
+      return;
+    }
     if (hasInput) return;
+    const segmenter = new Intl.Segmenter(locale.value, { granularity: "grapheme" });
+    const phrases = placeholderPhrases.map(phrase => [...segmenter.segment(translate(phrase))].map(part => part.segment));
     let characterCount = 0;
     let deleting = false;
     let timer: ReturnType<typeof setTimeout>;
     promptPlaceholder.value = "";
 
     function typePlaceholder() {
-      const phrase = placeholderPhrases[phraseIndex]!;
+      const phrase = phrases[phraseIndex]!;
       characterCount += deleting ? -1 : 1;
-      promptPlaceholder.value = phrase.slice(0, characterCount);
+      promptPlaceholder.value = phrase.slice(0, characterCount).join("");
       let delay = deleting ? 35 : 85;
       if (characterCount === phrase.length) {
         deleting = true;
@@ -161,6 +178,39 @@ const viewMode = ref("grid");
 const sortedProjects = computed(() => [...projectList.value].sort((left, right) =>
   sortDescending.value ? right.lastOpenedAt - left.lastOpenedAt : left.lastOpenedAt - right.lastOpenedAt
 ));
+
+function pasteText(event: ClipboardEvent) {
+  if (creating.value || opening.value) return;
+  try {
+    const file = createPastedTextFile(event.clipboardData?.getData("text/plain") ?? "");
+    if (!file) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (promptAttachments.value.length >= 20) return ElMessage.warning("每条消息最多添加 20 个附件");
+    promptAttachments.value.push({ name: file.name, path: "", mimeType: file.type, file });
+  } catch (error) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    ElMessage.error(error instanceof Error ? error.message : "添加文本附件失败，请重试");
+  }
+}
+
+async function restoreAttachment(index: number) {
+  const attachment = promptAttachments.value[index];
+  if (!attachment || creating.value || opening.value) return;
+  try {
+    const text = await readTextAttachment(attachment);
+    const currentIndex = promptAttachments.value.indexOf(attachment);
+    if (currentIndex < 0 || creating.value || opening.value) return;
+    prompt.value += `${prompt.value ? "\n" : ""}${text}`;
+    promptAttachments.value.splice(currentIndex, 1);
+    await nextTick();
+    promptInput.value?.focus();
+    promptInput.value?.textarea?.setSelectionRange(prompt.value.length, prompt.value.length);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "取回文本失败，请重试");
+  }
+}
 
 async function openProject(project?: Project) {
   if (creating.value || opening.value) return;
@@ -212,8 +262,8 @@ async function createProject(fromPrompt = true) {
     if (!empty) return ElMessage.warning("该文件夹不为空，请重新选择空文件夹；已有项目请使用“导入项目”或点击项目列表打开。");
     await useWorkspaceFiles(directory).writeJson("画布1.json", { toonflowCanvas: true, nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }, true);
     await workspaceStore.openProject(directory);
-    if (fromPrompt && prompt.value.trim()) {
-      workspaceStore.pendingAgentMessage = { directory: workspaceStore.project!.directory, prompt: prompt.value, model: selectedModel.value, reasoningEffort: reasoningEffort.value };
+    if (fromPrompt && (prompt.value.trim() || promptAttachments.value.length)) {
+      workspaceStore.pendingAgentMessage = { directory: workspaceStore.project!.directory, prompt: prompt.value, attachments: [...promptAttachments.value], model: selectedModel.value, reasoningEffort: reasoningEffort.value };
     }
     await router.push("/workspace");
   } catch (err) {
@@ -278,15 +328,18 @@ async function createProject(fromPrompt = true) {
 
       .starHint {
         top: 0;
-        right: calc(100% + 12px);
+        inset-inline-end: calc(100% + 12px);
         height: 100%;
+
+        &:dir(rtl) svg { transform: scaleX(-1); }
 
         @media (max-width: 560px) {
           top: calc(100% + 6px);
-          right: 0;
+          inset-inline-end: 0;
           height: auto;
 
           svg { transform: rotate(-45deg); }
+          &:dir(rtl) svg { transform: scaleX(-1) rotate(-45deg); }
         }
       }
     }
@@ -350,6 +403,10 @@ async function createProject(fromPrompt = true) {
             border-color: var(--el-color-primary-light-5);
           }
 
+          .promptAttachments {
+            margin-bottom: 12px;
+          }
+
           :deep(.el-textarea__inner) {
             padding: 4px 0;
             box-shadow: none;
@@ -371,16 +428,25 @@ async function createProject(fromPrompt = true) {
 
             .sendActions {
               margin-left: auto;
+              justify-content: flex-end;
 
               .modelSelect {
                 width: 190px;
               }
 
               .sendButton {
-                width: 36px;
                 height: 36px;
+
+                &.is-circle { width: 36px; }
               }
             }
+          }
+
+          .workspaceHint {
+            margin: 12px 0 0;
+            color: var(--el-text-color-regular);
+            font-size: 13px;
+            line-height: 1.6;
           }
         }
       }

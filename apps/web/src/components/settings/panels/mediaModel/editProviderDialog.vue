@@ -13,7 +13,7 @@
       <messageMarkdown v-if="provider?.readme" class="providerReadme" :content="provider.readme" />
       <el-form labelPosition="top" :disabled="saving">
         <el-form-item label="API Key">
-          <el-input v-model="apiKey" :prefixIcon="IconKey" type="password" showPassword autocomplete="off" aria-label="媒体供应商 API Key" />
+          <el-input v-model="apiKey" :prefixIcon="IconKey" type="password" dir="ltr" showPassword autocomplete="off" aria-label="媒体供应商 API Key" />
         </el-form-item>
       </el-form>
       <div class="modelHeader">
@@ -58,6 +58,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from "@toonflow/i18n/vue";
+
 import axios from "axios";
 import { defineAsyncComponent, ref, shallowRef, watch, type Component } from "vue";
 import { IconPlus, IconTrash, IconDeviceFloppy, IconEdit, IconKey } from "@tabler/icons-vue";
@@ -76,8 +78,9 @@ const modelEditorVisible = ref(false);
 const editingModelIndex = ref<number>();
 const saving = ref(false);
 const apiKey = ref("");
+const revision = ref("");
 const formError = ref("");
-const modelTypes = { image: "图片", video: "视频", audio: "音频", text: "文本" };
+const modelTypes = { get image() { return translate("图片"); }, get video() { return translate("视频"); }, get audio() { return translate("音频"); }, get text() { return translate("文本"); } };
 const modeLabels: Record<string, string> = {
   singleImage: "单图参考", multiReference: "多图参考", startEndRequired: "首尾帧必填",
   endFrameOptional: "尾帧可选", startFrameOptional: "首帧可选",
@@ -92,13 +95,14 @@ watch(visible, isVisible => {
   const configs = settings.value.mediaProviderConfigs as Record<string, { apiKey?: unknown }> | undefined;
   const configuredKey = provider && configs?.[provider.id]?.apiKey;
   apiKey.value = typeof configuredKey === "string" ? configuredKey : "";
+  revision.value = provider?.revision ?? "";
   models.value = JSON.parse(JSON.stringify(provider?.models ?? []));
 }, { immediate: true });
 
 function modelTags(model: MediaProviderModel) {
   const modes = Array.isArray(model.mode) ? model.mode.flat().filter((mode): mode is string => typeof mode === "string") : [];
   return modes.map(mode => {
-    if (mode === "text") return model.type === "image" ? "文生图" : "文生视频";
+    if (mode === "text") return model.type === "image" ? translate("文生图") : translate("文生视频");
     const reference = /^(imageReference|videoReference|audioReference):(\d+)$/.exec(mode);
     return reference ? `${modeLabels[reference[1]!]} ×${reference[2]}` : modeLabels[mode] ?? mode;
   });
@@ -118,8 +122,9 @@ function confirmModel(model: MediaProviderModel) {
 
 async function saveModels() {
   if (saving.value || !provider) return;
-  const { id: providerId, fileName, revision } = provider;
+  const { id: providerId, fileName } = provider;
   formError.value = "";
+  let modelsSaved = false;
   let configSaved = false;
   try {
     const ids = new Set<string>();
@@ -134,7 +139,14 @@ async function saveModels() {
     if (apiKey.value.length > 8192) throw new Error("API Key 过长");
     saving.value = true;
     const nextKey = apiKey.value.trim();
-    configSaved = await saveSettings(settings => {
+    const { data } = await axios.put<{ code: number; data: MediaProvider; message?: string }>("/api/providers/media/save", {
+      fileName, revision: revision.value, models: values,
+    });
+    if (data.code !== 200 || !data.data) throw new Error(data.message || "保存模型失败");
+    revision.value = data.data.revision;
+    modelsSaved = true;
+    invalidateNodeModels("media");
+    await saveSettings(settings => {
       const configs = settings.mediaProviderConfigs as Record<string, Record<string, unknown>> | undefined;
       if (configs !== undefined && (!configs || typeof configs !== "object" || Array.isArray(configs))) throw new Error("媒体供应商配置格式无效");
       const current = configs?.[providerId];
@@ -142,15 +154,18 @@ async function saveModels() {
       if (nextKey === (current?.apiKey ?? "")) return;
       return { mediaProviderConfigs: { ...configs, [providerId]: { ...current, apiKey: nextKey } } };
     });
-    const { data } = await axios.put<{ data: MediaProvider }>("/api/providers/media/save", {
-      fileName, revision, models: values,
-    });
-    invalidateNodeModels("media");
-    emit("saved", data.data);
+    configSaved = true;
+    const response = await axios.get<{ code: number; data: MediaProvider[]; message?: string }>("/api/providers/media/list");
+    if (response.data.code !== 200 || !Array.isArray(response.data.data)) throw new Error(response.data.message || "读取最新模型失败");
+    const latest = response.data.data.find(item => item.fileName === fileName);
+    if (!latest) throw new Error("供应商已不存在");
+    revision.value = latest.revision;
+    emit("saved", latest);
     visible.value = false;
   } catch (error) {
     const message = axios.isAxiosError(error) ? error.response?.data?.message || error.message : error instanceof Error ? error.message : "保存失败，请重试";
-    formError.value = configSaved ? `连接配置已保存，模型未保存：${message}。模型修改已保留，请重试。` : message;
+    formError.value = configSaved ? `模型与连接配置已保存，读取最新模型失败：${message}。请重新打开编辑。`
+      : modelsSaved ? `模型已保存，连接配置未保存：${message}。填写内容已保留，请重试。` : message;
   } finally {
     saving.value = false;
   }

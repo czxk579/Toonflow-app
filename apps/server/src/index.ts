@@ -12,6 +12,7 @@ const app = await createApp({
   dataDirectory,
   toolsRoot: resolve(appDirectory, "build/tools"),
   nodesRoot: resolve(appDirectory, "build/nodes"),
+  extRoot: resolve(appDirectory, "build/ext"),
   // ACT: 暂不安装内置团队，随团队打包一同恢复。
   // agentsRoot: resolve(appDirectory, "build/agents"),
   providersRoot: resolve(appDirectory, fromSource ? "packages/providers/src" : "build/providers"),

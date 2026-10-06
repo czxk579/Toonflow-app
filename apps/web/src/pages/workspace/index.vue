@@ -13,8 +13,14 @@
       <documentPanel
         v-if="activePanel === 'document'"
         :key="workspaceStore.project?.directory"
-        ref="documentPanelRef"
+        :ref="setDocumentPanel"
         :readNode="readDocumentNode"
+        :readNodes="readDocumentNodes"
+        :mountNode="mountDocumentNode"
+        :resolveNodeFile="resolveDocumentNodeFile"
+        :observeNode="observeDocumentNode"
+        :flushNodes="flushDocumentNodes"
+        :fileAction="performFileAction"
         :saveNode="saveDocumentNode" />
     </keep-alive>
     <workspaceMenu class="workspaceMenu" @openSettings="settingsVisible = true" />
@@ -41,7 +47,7 @@
 </template>
 
 <script setup lang="ts">
-import { defineAsyncComponent, nextTick, onMounted, onScopeDispose, provide, ref } from "vue";
+import { computed, defineAsyncComponent, nextTick, onMounted, onScopeDispose, provide, ref, shallowRef, watch, type ComponentPublicInstance } from "vue";
 import { onBeforeRouteLeave } from "vue-router";
 import axios from "axios";
 import { IconLayoutDashboard, IconFileText } from "@tabler/icons-vue";
@@ -51,6 +57,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { registerWorkspaceControl, waitForControlValue } from "@/lib/mcpControl";
 import anonymousData from "@/lib/anonymousData";
 import canvasPanel from "./panels/canvas/canvasHost.vue";
+import type { DocumentNodeOptions } from "./panels/canvas/canvasFiles";
 import workspaceMenu from "./components/workspaceMenu.vue";
 import floatingAgent from "./components/floatingAgent.vue";
 
@@ -67,9 +74,19 @@ const agentVisible = ref(true);
 const agentWidth = ref(0);
 const settingsVisible = ref(false);
 const canvasPanelRef = ref<InstanceType<typeof canvasPanel>>();
-const documentPanelRef = ref<InstanceType<typeof documentPanel>>();
+const documentPanelCache = shallowRef<{ directory: string; instance: InstanceType<typeof documentPanel> }>();
+const documentPanelRef = computed(() => documentPanelCache.value?.directory === workspaceStore.project?.directory ? documentPanelCache.value?.instance : undefined);
+watch(() => workspaceStore.project?.directory, () => { documentPanelCache.value = undefined; }, { flush: "sync" });
+function setDocumentPanel(value: Element | ComponentPublicInstance | null) {
+  const directory = workspaceStore.project?.directory;
+  // KeepAlive 失活会清空模板 ref，保留同一工作区实例以协调后台文档保存和文件操作。
+  if (value && directory) documentPanelCache.value = { directory, instance: value as InstanceType<typeof documentPanel> };
+}
 provide("canvas", () => canvasPanelRef.value?.getCanvasContext());
+provide("mentionCanvas", () => canvasPanelRef.value?.mentionSource);
 provide("activateCanvasPanel", () => switchPanel("canvas"));
+provide("performWorkspaceFileAction", (directory: string, action: "copy" | "rename" | "delete", path: string, target?: string) =>
+  documentPanelRef.value ? documentPanelRef.value.performFileAction(directory, action, path, target) : performFileAction(directory, action, path, target));
 
 const controlLifetime = new AbortController();
 onScopeDispose(() => controlLifetime.abort(new Error("工作区已关闭")));
@@ -172,9 +189,39 @@ function readDocumentNode(directory: string, canvasPath: string, nodeId: string)
   return canvasPanelRef.value.readDocumentNode(directory, canvasPath, nodeId);
 }
 
-function saveDocumentNode(directory: string, canvasPath: string, nodeId: string, handleId: string, text: string) {
+function readDocumentNodes(directory: string, options?: DocumentNodeOptions) {
   if (!canvasPanelRef.value) throw new Error("画布尚未就绪");
-  return canvasPanelRef.value.saveDocumentNode(directory, canvasPath, nodeId, handleId, text);
+  return canvasPanelRef.value.readDocumentNodes(directory, options);
+}
+
+function mountDocumentNode(directory: string, canvasPath: string, nodeId: string, target: HTMLElement) {
+  if (!canvasPanelRef.value) throw new Error("画布尚未就绪");
+  return canvasPanelRef.value.mountDocumentNode(directory, canvasPath, nodeId, target);
+}
+
+function resolveDocumentNodeFile(directory: string, path: string) {
+  if (!canvasPanelRef.value) throw new Error("画布尚未就绪");
+  return canvasPanelRef.value.resolveDocumentNodeFile(directory, path);
+}
+
+function observeDocumentNode(directory: string, canvasPath: string, nodeId: string, onState: (state: { dirty: boolean; error: string; deleted: boolean }) => void) {
+  if (!canvasPanelRef.value) throw new Error("画布尚未就绪");
+  return canvasPanelRef.value.observeDocumentNode(directory, canvasPath, nodeId, onState);
+}
+
+async function flushDocumentNodes() {
+  if (!canvasPanelRef.value) throw new Error("画布尚未就绪");
+  await canvasPanelRef.value.flushSave();
+}
+
+function performFileAction(directory: string, action: "copy" | "rename" | "move" | "delete", path: string, target?: string, nodeId?: string) {
+  if (!canvasPanelRef.value) throw new Error("画布尚未就绪");
+  return canvasPanelRef.value.performFileAction(directory, action, path, target, nodeId);
+}
+
+function saveDocumentNode(directory: string, canvasPath: string, nodeId: string, handleId: string, text: string, expectedText?: string) {
+  if (!canvasPanelRef.value) throw new Error("画布尚未就绪");
+  return canvasPanelRef.value.saveDocumentNode(directory, canvasPath, nodeId, handleId, text, expectedText);
 }
 </script>
 

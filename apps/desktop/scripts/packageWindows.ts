@@ -1,5 +1,6 @@
 import { $ } from "bun";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from "@toonflow/file";
+import { file, write } from "@toonflow/file/bun";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import desktopConfig from "../../../electrobun.config";
@@ -21,10 +22,19 @@ const webViewDir = join(nsisDir, "webview2");
 const bootstrapper = join(webViewDir, "MicrosoftEdgeWebview2Setup.exe");
 const loader = join(webViewDir, "WebView2Loader.dll");
 const runningChecker = join(nsisDir, "checkRunning.exe");
+const initializeInstallScript = join(nsisDir, "initializeInstall.js");
 
 mkdirSync(webViewDir, { recursive: true });
+// ACT: 安装脚本在临时目录执行，先打包文件层依赖，避免依赖开发目录的 node_modules。
+const initializeInstallBuild = await Bun.build({
+  entrypoints: [join(installerDir, "initializeInstall.ts")],
+  outdir: nsisDir,
+  target: "bun",
+  minify: true,
+});
+if (!initializeInstallBuild.success) throw new AggregateError(initializeInstallBuild.logs, "安装初始化脚本构建失败。");
 
-const dependencies = await Bun.file(".hutch/dependencies.lock").json();
+const dependencies = await file(".hutch/dependencies.lock").json();
 const electrobun = dependencies.objects.find(
   (item: { type: string; platform: string }) => item.type === "electrobun" && item.platform === "windows-x64"
 );
@@ -56,15 +66,15 @@ foreach ($file in @(${quotePowerShell(loader)}, ${quotePowerShell(temporary ?? b
 const stagingDir = mkdtempSync(join(nsisDir, "payload"));
 const tarFile = join(stagingDir, "app.tar");
 try {
-  const manifest = await Bun.file(join(artifactDir, "stable-win-x64-update.json")).json();
+  const manifest = await file(join(artifactDir, "stable-win-x64-update.json")).json();
   // ACT: 平台、通道和 Hash 由本机 SDK 生成，只检查独立打包时容易遗留的旧版本。
   if (manifest.version !== desktopConfig.app.version) throw new Error("构建产物版本不一致，请重新构建。");
   // ACT: NSIS 仅打包原始 tar，安装时释放应用并保留它作为增量更新基线。
-  const archive = await Bun.file(join(artifactDir, manifest.artifact.file)).arrayBuffer();
-  await Bun.write(tarFile, Bun.zstdDecompressSync(archive));
+  const archive = await file(join(artifactDir, manifest.artifact.file)).arrayBuffer();
+  await write(tarFile, Bun.zstdDecompressSync(archive));
   await $`${makensis} /INPUTCHARSET UTF8 /DwebView2Dir=${webViewDir} /DrunningChecker=${runningChecker} /DappIcon=${appIcon} /DappVersion=${
     desktopConfig.app.version
-  } /DappIdentifier=${desktopConfig.app.identifier} /DappTar=${tarFile} /DappHash=${manifest.hash} /DoutputFile=${outputFile} ${join(installerDir, "installer.nsi")}`;
+  } /DappIdentifier=${desktopConfig.app.identifier} /DappTar=${tarFile} /DappHash=${manifest.hash} /DoutputFile=${outputFile} /DinitializeInstallScript=${initializeInstallScript} ${join(installerDir, "installer.nsi")}`;
   console.log(`NSIS 安装包：${outputFile}`);
 } finally {
   if (dirname(realpathSync(stagingDir)) !== realpathSync(nsisDir)) throw new Error("拒绝清理暂存目录以外的路径。");

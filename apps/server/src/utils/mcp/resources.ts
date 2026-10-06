@@ -1,6 +1,7 @@
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import type { McpOptions } from "@toonflow/mcp";
-import { readFile } from "node:fs/promises";
+import { readFile } from "@toonflow/file";
+import { file } from "@toonflow/file/bun";
 import { resolve } from "node:path";
 import * as skillFile from "@/utils/skills/files";
 
@@ -17,7 +18,7 @@ export const skillResources: NonNullable<McpOptions["resources"]> = {
           uri: `toonflow://skills/${encodeURIComponent(skill.name)}/${path.split("/").map(encodeURIComponent).join("/")}`,
           name: `${skill.name}/${path}`,
           description: main ? skill.description : `${skill.name} 的附属资料：${path}`,
-          mimeType: Bun.file(main ? skill.filePath : resolve(skill.baseDir, path)).type || "application/octet-stream",
+          mimeType: file(main ? skill.filePath : resolve(skill.baseDir, path)).type || "application/octet-stream",
         });
       }
     }
@@ -34,7 +35,7 @@ export const skillResources: NonNullable<McpOptions["resources"]> = {
     const { target } = await skillFile.locate(name, path === mainPath ? undefined : path);
     const bytes = await readFile(target, { signal });
     if (bytes.byteLength > skillFile.maxBytes) throw Object.assign(new Error("技能文件不能超过 20 MB"), { status: 413 });
-    const mimeType = Bun.file(target).type || "application/octet-stream";
+    const mimeType = file(target).type || "application/octet-stream";
     let text: string | undefined;
     if (!bytes.includes(0)) {
       try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }

@@ -104,10 +104,15 @@ const visible = defineModel<boolean>({ default: false });
       background: transparent;
       color: var(--el-text-color-regular);
       font: inherit;
-      text-align: left;
+      text-align: start;
       cursor: pointer;
 
-      .panelIcon { display: inline-flex; }
+      .panelIcon { display: inline-flex; flex-shrink: 0; }
+
+      > span {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
 
       &:hover {
         background: var(--el-fill-color-light);

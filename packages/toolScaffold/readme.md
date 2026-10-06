@@ -14,7 +14,7 @@
 
 `import { z } from "zod"` 无需修改：构建时将 `zod` 转为外部模块 `toonflow:tool-zod`，Server 在加载工具前通过 Bun 虚拟模块提供完整的 Zod 4 导出。仅共享精确的 `zod` 导入，子路径仍随工具打包。发布这些新产物时须同步更新 Server；旧版自带 Zod 的工具仍可加载。
 
-在仓库根目录运行 `bun run build:tools` 会清空 `build/tools` 后构建全部工具，不改动 `data/tools`；`dev:desktop` 会先执行 `dev:plugins` 同步开发产物。在“设置 → 工具”中安装 `.tool.js`、启停、卸载或编辑配置；配置写入 `data/settings.json` 的 `toolConfigs`，下一次发送消息时生效。桌面构建会携带默认工具，首次启动初始化后，用户卸载的工具不会因普通重启而自动恢复。
+在仓库根目录运行 `bun run build:tools` 会清空 `build/tools` 后构建全部工具，不改动 `data/tools`；`dev:desktop` 会先执行 `dev:plugins` 同步开发产物。在“设置 → 插件市场”中安装 `.tool.js`、启停、卸载或编辑配置；配置写入 `data/settings.json` 的 `toolConfigs`，下一次发送消息时生效。桌面构建会携带默认工具，首次启动初始化后，用户卸载的工具不会因普通重启而自动恢复。
 
 文件首行 `/*! toonflowTool:<JSON> */` 包含 `ToolMetadata`，其中 `version` 为工具版本，随单个 `.tool.js` 文件安装和分享。服务端可以读取这段数据而不执行插件；旧工具没有版本时仍可加载，列表返回空字符串表示未知版本，不推断或补造版本号。
 
@@ -24,7 +24,9 @@
 
 `/api/tools/renderers` 仅列出已启用的组件映射及内容版本地址，`/api/tools/client` 只下发对应浏览器代码与样式，不执行或暴露服务端入口、配置和密钥。web 使用 `@toonflow/tools-scaffold/client` 的 `loadToolComponent(tool.name)`，统一向组件传入 `{ tool: ToolCall, directory?: string }`；无组件时展示普通工具消息，加载失败时提示用户停止后重试。历史消息可能只有 `args/result`，组件不能假定一定存在实时交互信息。`askUser` 的回答、跳过和历史展示均由包内 `src/questionCard.vue` 维护，web 不导入该组件。
 
-`createTools(context)` 返回 Pi 的工具定义数组，一个插件可提供多个工具。宿主传入当前工作区 `cwd`、仅属于该工具且已校验的配置 `config`、安全路径解析 `resolvePath`、带锁的原子写入 `writeFile`，以及 Pi SDK 工具构造函数。不传入应用全局设置或其他工具的配置；工具需要的密钥通过自身配置项填写。工作区文件插件通过宿主方法限制路径；只读模式只注册 `read` 与 `ls`。
+`createTools(context)` 返回 Pi 的工具定义数组，一个插件可提供多个工具。宿主传入当前工作区 `cwd`、仅属于该工具且已校验的配置 `config`、统一文件能力 `files`，以及 Pi SDK 工具构造函数。不传入应用全局设置或其他工具的配置；工具需要的密钥通过自身配置项填写。工作区文件插件通过宿主方法限制路径；只读模式只注册 `read` 与 `ls`。
+
+`context.files` 提供 `readFile`、`access`、`stat`、`readdir`、`detectImageMimeType`、`writeFile`、`mkdir`、`rename`、`remove` 和 `copyFile`，全部接入宿主的统一文件层。读取方法第二个参数 `readOnly=true` 时额外允许读取全局技能目录；写入始终限制在当前工作区。`writeFile(path, content, exclusive?)` 原子保存，`exclusive=true` 禁止覆盖；`mkdir(path, recursive?)` 和 `remove(path, recursive?)` 默认不递归；`rename` 禁止覆盖已有目标；`copyFile(path, target, exclusive?)` 默认允许覆盖。旧 `resolvePath`、`writeFile` 入口继续保留，新工具使用 `files`，避免直接导入文件 API 或把文件层实现打入插件。已有直接调用系统 API 的旧工具需要更新其源码后重新构建。
 
 `context.skills` 提供统一的技能扫描、读取、新建和修改，复用宿主的 SDK 扫描与文件落盘。`skillOperator` 据此操作工作区 `skill/` 和全局 `data/skills/`，无需把 Pi SDK 打入工具。读取、新建、修改默认开启，可在工具配置中分别关闭；目录查询始终保留，普通工作区文件的写入范围不因此扩大。
 
@@ -64,7 +66,7 @@ ffmpeg.ffprobe("assets/first.mp4", (error, data) => {
 
 - `skillOperator`：通过 `action: list/read/create/update` 聚合技能目录与读写，支持按 `name`、`scope`、技能相对 `path` 操作正文及资料。默认同名工作区技能优先；新建默认工作区，`SKILL.md` 校验名称和描述，新建不覆盖、修改只针对已有文件。启用后由此工具按需查询目录，保留 `/skill:名称` 调用。
 - `askUser`：提问器，通过 `context.question.ask` 一次发送一个或多个问题，等待用户回答或明确跳过后继续执行。简单提问传 `{ title, question, options? }`，返回 `{ answer }`；多个问题传 `{ title, question, fields }`，前端使用 `@form-create/element-ui` 渲染，返回 `{ answer, values }`。`fields` 最多 12 项，每项一个问题，包含唯一 `field`、`title`、`type`，默认可留空，可设置 `required`、`placeholder`；支持 `input`、`textarea`、`radio`、`checkbox`、`select`、`inputNumber`、`switch`，选择类字段必须提供 `options`。动态表单与顶层 `options` 不同时使用。点击“跳过”返回 `{ answer: "用户跳过了本次提问", skipped: true }`，不要求填写必填项，也不停止 Agent；停止或断开对话仍会取消等待。问题、回答和跳过结果沿用 Pi 工具调用历史保存。
-- `canvas`：画布操作工具，通过可选的 `context.canvas` 控制本轮绑定的激活画布，提供 `getCanvas`、`addNode`、`deleteNodes`、`moveNodes`、`renameNodes`、`connectNodes`、`deleteEdges`、`selectNodes`、`fitCanvas`，以及节点注册函数的统一入口 `nodeTools`；`deleteNodes`/`moveNodes`/`renameNodes`/`connectNodes`/`deleteEdges` 均一次接受多个目标进行批量操作。参数规则由 `@toonflow/tool-canvas/runtime` 的 Zod schema 共享。没有激活画布时不提供这些工具；空画布仍可新增节点，再调用新节点的函数。执行走 Agent 流与回传接口，操作由当前 Vue Flow 实例完成并复用画布保存逻辑，不通过直接编辑 JSON 控制画布。
+- `canvas`：画布操作工具，通过可选的 `context.canvas` 控制本轮绑定的激活画布。读取工具为概览 `getCanvas`、筛选分页 `findCanvasNodes`、按 ID 投影/分段读取 `getCanvasNodes`、局部连接 `getCanvasEdges`、目标节点函数查询 `getNodeTools`；每次最多 64 KiB，按 `hasMore/nextCursor` 续读，大节点值沿 `path` 配合文本或对象/数组偏移继续读取。`context.canvas` 只需要画布 ID 和调用入口，不注入全部函数清单。变更工具提供 `addNode`、`deleteNodes`、`moveNodes`、`renameNodes`、`connectNodes`、`deleteEdges`、`selectNodes`、`fitCanvas`，以及节点注册函数的统一执行入口 `nodeTools`；`deleteNodes`/`moveNodes`/`renameNodes`/`connectNodes`/`deleteEdges` 均一次接受多个目标进行批量操作。参数规则由 `@toonflow/tool-canvas/runtime` 的 Zod schema 共享。没有激活画布时不提供这些工具；空画布仍可新增节点，再查询并调用新节点的函数。执行走 Agent 流与回传接口，修改由当前 Vue Flow 实例完成并复用画布保存逻辑，读取不触发保存，不通过直接编辑 JSON 控制画布。
 - `workspace`：工作区读取、写入、编辑和目录列表，可开启只读模式。
 - `webSearch`：默认使用免密钥的 DuckDuckGo，可配置切换 DeepSeek 或 Tavily 并填写对应密钥；支持设置结果数量和超时。
 - `webFetch`：使用 Bun 原生 fetch 读取网页，可设置超时与正文长度；最多 5 次重定向和 2 MiB 响应正文，不预判 DNS 公网地址，兼容 Fake-IP，网络隔离由部署环境负责。

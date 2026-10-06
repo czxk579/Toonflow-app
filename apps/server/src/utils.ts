@@ -9,6 +9,7 @@ import conf, { removeLegacySettings } from "@/utils/conf";
 import * as ai from "@/utils/ai";
 import * as plugins from "@/utils/plugins/tools";
 import * as nodePlugins from "@/utils/plugins/nodes";
+import * as extPlugins from "@/utils/plugins/ext";
 import * as agent from "@/agent";
 import * as canvas from "@/agent/bridge/canvas";
 import * as question from "@/agent/bridge/question";
@@ -20,6 +21,7 @@ import * as mcpRuntime from "@/utils/mcp/runtime";
 import * as teams from "@/utils/teams";
 import * as a2aSettings from "@/agent/a2a/settings";
 import * as personalization from "@/utils/personalization";
+import * as mentionFiles from "@/agent/mentionFiles";
 
 export default {
   assets,
@@ -34,6 +36,7 @@ export default {
   ai,
   plugins,
   nodePlugins,
+  extPlugins,
   agent,
   canvas,
   question,
@@ -45,4 +48,5 @@ export default {
   teams,
   a2aSettings,
   personalization,
+  mentionFiles,
 };

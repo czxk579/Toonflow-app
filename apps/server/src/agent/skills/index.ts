@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { t } from "@/lib/i18n";
+import { existsSync, mkdir, readFile, realpath, stat } from "@toonflow/file";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { loadSkills, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { SkillContext, SkillLocation, SkillScope } from "@toonflow/tools-scaffold/runtime";
@@ -26,7 +26,7 @@ export function createSkillContext(cwd: string): SkillContext {
   async function locate(request: SkillLocation, create = false) {
     const scope = create ? request.scope ?? "workspace" : request.scope;
     const skill = loadAgentSkills(cwd, scope).skills.find(skill => skill.name === request.name);
-    if (!skill && !create) throw new Error(`技能不存在：${request.name}`);
+    if (!skill && !create) throw new Error(t`技能不存在：${request.name}`);
     if (!skill && (request.name.length > 64 || !/^[a-z][a-zA-Z0-9]*$/.test(request.name))) throw new Error("新技能名称必须为不超过 64 字符的小驼峰");
     const targetScope = scope ?? skillScope(skill!.filePath);
     const root = await realpath(targetScope === "workspace" ? cwd : dirname(conf.path));

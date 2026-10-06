@@ -21,32 +21,6 @@ internal static class updateHelper
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern uint GetPrivateProfileString(string section, string key, string fallback, StringBuilder value, uint size, string path);
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct startupInfo
-    {
-        public int size;
-        public string reserved, desktop, title;
-        public int x, y, width, height, charsX, charsY, fill, flags;
-        public short showWindow, reservedSize;
-        public IntPtr reservedBytes, input, output, error;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct processInformation
-    {
-        public IntPtr process, thread;
-        public int processId, threadId;
-    }
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateProcessW(string application, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes,
-        bool inheritHandles, uint creationFlags, IntPtr environment, string currentDirectory, ref startupInfo startup, out processInformation process);
-
-    [DllImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseHandle(IntPtr handle);
-
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CreateDirectoryW(string path, IntPtr securityAttributes);
@@ -54,7 +28,7 @@ internal static class updateHelper
     [STAThread]
     private static int Main(string[] args)
     {
-        string root = null, transaction = null, version = null, hash = null;
+        string root = null, transaction = null, version = null, hash = null, planPath = null;
         bool quiet = Array.IndexOf(args, "--quiet") >= 0;
         Mutex mutex = null;
         bool locked = false;
@@ -62,11 +36,11 @@ internal static class updateHelper
         {
             if (args.Length < 2 || args.Length > 3 || (args[0] != "--apply-update" && args[0] != "--spawn-update" && args[0] != "--apply-scheduled-update") || (args.Length == 3 && args[2] != "--quiet"))
                 throw new InvalidOperationException("更新助手参数无效。");
-            string planPath = fullPath(args[1]);
+            planPath = fullPath(args[1]);
             ensurePlainPath(planPath);
             if (args[0] == "--spawn-update")
             {
-                spawnUpdate(planPath, quiet);
+                spawnScheduledUpdate(Process.GetCurrentProcess().MainModule.FileName, planPath, quiet);
                 return 0;
             }
             if (args[0] == "--apply-scheduled-update") scheduledTaskFolder().DeleteTask(scheduledTaskName(planPath), 0);
@@ -129,7 +103,8 @@ internal static class updateHelper
                 ensurePlainTree(stage);
                 verifyApp(stage, identifier, channel, version, hash);
                 if (!File.Exists(planPath)) throw new InvalidOperationException("更新已取消。");
-                writeFile(Path.Combine(cache, "update-" + transaction + ".ready"), "ready");
+                long quitDeadline = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds + 60000;
+                writeFile(Path.Combine(cache, "update-" + transaction + ".ready"), serializer.Serialize(new { transactionId = transaction, helperPid = Process.GetCurrentProcess().Id, quitDeadline = quitDeadline }));
                 var timer = Stopwatch.StartNew();
                 while (!parent.WaitForExit(250))
                 {
@@ -140,7 +115,7 @@ internal static class updateHelper
                 ensurePlainPath(root);
                 ensurePlainPath(Path.Combine(root, "app"));
                 ensurePlainPath(cache);
-                apply(root, stage, backup, oldInfo, identifier, channel, version);
+                apply(root, stage, backup, oldInfo, identifier, channel, version, transaction, hash);
             }
             writeResult(root, transaction, true, null, version, hash);
             return 0;
@@ -149,6 +124,12 @@ internal static class updateHelper
         {
             if (root != null)
             {
+                // 只有归属校验完成且持有安装锁的事务能撤销交接；结果写入失败也不能留下可退出的旧标记。
+                foreach (string path in new[] { Path.Combine(root, "self-extraction", "update-" + transaction + ".ready"), planPath })
+                {
+                    try { File.Delete(path); }
+                    catch (Exception cleanupError) { error = new Exception(error.Message + "\n取消更新交接文件失败：" + path + "：" + cleanupError.Message, error); }
+                }
                 try { writeResult(root, transaction, false, error.Message, version, hash); }
                 catch (Exception stateError) { error = new Exception(error.Message + "\n更新结果无法写入：" + stateError.Message); }
             }
@@ -161,24 +142,6 @@ internal static class updateHelper
             if (locked) mutex.ReleaseMutex();
             if (mutex != null) mutex.Dispose();
         }
-    }
-
-    private static void spawnUpdate(string planPath, bool quiet)
-    {
-        string executable = Process.GetCurrentProcess().MainModule.FileName;
-        var startup = new startupInfo { size = Marshal.SizeOf(typeof(startupInfo)) };
-        processInformation child;
-        // CREATE_BREAKAWAY_FROM_JOB 避免 Bun/launcher 的 Job 随主应用退出而终止助手。
-        if (!CreateProcessW(executable, new StringBuilder(quote(executable) + " --apply-update " + quote(planPath) + (quiet ? " --quiet" : "")),
-            IntPtr.Zero, IntPtr.Zero, false, 0x01000000 | 0x08000000, IntPtr.Zero, Path.GetDirectoryName(executable), ref startup, out child))
-        {
-            int error = Marshal.GetLastWin32Error();
-            if (error != 5) throw new Win32Exception(error, "无法启动独立更新进程。");
-            spawnScheduledUpdate(executable, planPath, quiet);
-            return;
-        }
-        CloseHandle(child.thread);
-        CloseHandle(child.process);
     }
 
     private static string scheduledTaskName(string planPath)
@@ -197,7 +160,7 @@ internal static class updateHelper
 
     private static void spawnScheduledUpdate(string executable, string planPath, bool quiet)
     {
-        // ACT: 仅在宿主 Job 禁止 breakaway 时借助系统任务服务；不提权、不设置触发器、不保留任务。
+        // ACT: breakaway 成功仍可能留在外层 Job，统一由当前用户的任务服务启动；不提权、不设置触发器，启动后删除任务。
         string taskName = scheduledTaskName(planPath);
         dynamic scheduler = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service", true));
         scheduler.Connect();
@@ -237,54 +200,139 @@ internal static class updateHelper
         }
     }
 
-    private static void apply(string root, string stage, string backup, Dictionary<string, object> oldInfo, string identifier, string channel, string version)
+    private static void moveDirectory(string source, string destination)
     {
-        string app = Path.Combine(root, "app");
-        bool originalMoved = false, moved = false;
-        try
+        var timer = Stopwatch.StartNew();
+        while (true)
         {
-            Directory.Move(app, backup);
-            originalMoved = true;
-            Directory.Move(stage, app);
-            moved = true;
-            restoreRegistration(root, identifier, channel, version);
-            startApp(root);
-            // ACT: 启动进程成功不等于新应用已就绪；保留同卷备份供失败或断电后恢复。
-        }
-        catch (Exception error)
-        {
-            try
+            try { Directory.Move(source, destination); return; }
+            catch (Exception error)
             {
-                if (originalMoved)
-                {
-                    if (moved) Directory.Move(app, stage);
-                    Directory.Move(backup, app);
-                }
-                restoreRegistration(root, identifier, channel, text(oldInfo, "version"));
-                startApp(root);
+                int code = error.HResult & 0xffff;
+                // ACT: Windows 退出后的短暂占用只等待 10 秒；权限配置错误或持续占用仍交给事务回滚。
+                if (!(error is IOException || error is UnauthorizedAccessException) || (code != 5 && code != 32 && code != 33)
+                    || timer.Elapsed.TotalSeconds >= 10) throw;
+                Thread.Sleep(200);
             }
-            catch (Exception rollbackError)
-            {
-                throw new InvalidOperationException(error.Message + "\n自动恢复未完成：" + rollbackError.Message + "\n保留的应用目录：" + backup, error);
-            }
-            throw new InvalidOperationException(error.Message + "\n已恢复旧版本。", error);
         }
     }
 
-    private static void startApp(string root)
+    private static void apply(string root, string stage, string backup, Dictionary<string, object> oldInfo, string identifier, string channel, string version, string transaction, string hash)
     {
+        string app = Path.Combine(root, "app");
+        bool originalMoved = false, moved = false;
+        Process launched = null;
+        try
+        {
+            moveDirectory(app, backup);
+            originalMoved = true;
+            moveDirectory(stage, app);
+            moved = true;
+            restoreRegistration(root, identifier, channel, version);
+            startApp(root, transaction, version, hash, out launched);
+        }
+        catch (Exception error)
+        {
+            string registrationError = "";
+            try
+            {
+                if (launched != null) stopApp(launched);
+                if (originalMoved)
+                {
+                    if (moved) moveDirectory(app, stage);
+                    moveDirectory(backup, app);
+                }
+                // 已恢复的旧程序应照常启动，安装登记写入失败单独保留诊断。
+                try { restoreRegistration(root, identifier, channel, text(oldInfo, "version")); }
+                catch (Exception restoreError) { registrationError = "\n安装登记恢复未完成：" + restoreError.Message; }
+                Process previous = null;
+                try { startApp(root, null, null, null, out previous); }
+                finally { if (previous != null) previous.Dispose(); }
+            }
+            catch (Exception rollbackError)
+            {
+                throw new InvalidOperationException(error.Message + registrationError + "\n自动恢复未完成：" + rollbackError.Message
+                    + "\n保留的应用目录：" + (Directory.Exists(backup) ? backup : app), error);
+            }
+            throw new InvalidOperationException(error.Message + registrationError + "\n已恢复旧版本。", error);
+        }
+        finally { if (launched != null) launched.Dispose(); }
+    }
+
+    private static void startApp(string root, string transaction, string version, string hash, out Process process)
+    {
+        process = null;
         string launcher = Path.Combine(root, "app", "bin", "launcher.exe");
-        using (var process = Process.Start(new ProcessStartInfo(launcher)
+        string startedPath = transaction == null ? null : Path.Combine(root, "self-extraction", "update-" + transaction + ".started.json");
+        if (startedPath != null)
+        {
+            ensurePlainPath(startedPath);
+            if (File.Exists(startedPath)) throw new InvalidOperationException("此更新事务已存在启动结果，请重新准备更新。");
+        }
+        var options = new ProcessStartInfo(launcher)
         {
             WorkingDirectory = Path.GetDirectoryName(launcher),
             UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden
-        }))
+        };
+        options.EnvironmentVariables.Remove("TOONFLOW_UPDATE_TRANSACTION");
+        if (transaction != null) options.EnvironmentVariables["TOONFLOW_UPDATE_TRANSACTION"] = transaction;
+        process = Process.Start(options);
+        if (process == null) throw new InvalidOperationException("更新后无法启动 Toonflow。");
+        // 在应用确认就绪或清理完成前保持句柄，不能用进程名称定位本次启动。
+        IntPtr handle = process.Handle;
+        if (transaction == null)
         {
-            if (process == null || (process.WaitForExit(1000) && process.ExitCode != 0))
-                throw new InvalidOperationException("更新后无法启动 Toonflow。");
+            // ACT: 回滚版本可能尚不支持就绪协议，保留旧启动器的短暂退出检查。
+            if (process.WaitForExit(1000) && process.ExitCode != 0) throw new InvalidOperationException("恢复旧版本后无法启动 Toonflow。");
+            return;
         }
+        var timer = Stopwatch.StartNew();
+        while (true)
+        {
+            if (process.HasExited) throw new InvalidOperationException("新版本在界面就绪前退出，退出码：" + process.ExitCode + "。");
+            if (File.Exists(startedPath))
+            {
+                ensurePlainPath(startedPath);
+                var result = readJson(startedPath);
+                object success;
+                if (text(result, "transactionId") != transaction || text(result, "version") != version || text(result, "hash") != hash
+                    || !result.TryGetValue("success", out success) || !(success is bool))
+                    throw new InvalidOperationException("新版本启动结果与当前更新事务不一致。");
+                if (!(bool)success) throw new InvalidOperationException("新版本界面启动失败。");
+                if (process.HasExited) throw new InvalidOperationException("新版本在界面就绪前退出，退出码：" + process.ExitCode + "。");
+                return;
+            }
+            if (timer.Elapsed.TotalSeconds >= 120) throw new InvalidOperationException("新版本未在 120 秒内完成界面启动。");
+            Thread.Sleep(100);
+        }
+    }
+
+    private static void stopApp(Process process)
+    {
+        // ACT: 已退出的 launcher 由 SDK Job 清理子进程；残余占用交由有界 Move 失败保护备份，不按名称终止其他实例。
+        if (!process.HasExited)
+        {
+            string taskkill = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "taskkill.exe");
+            using (var stop = Process.Start(new ProcessStartInfo(taskkill, "/PID " + process.Id + " /T /F")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            }))
+            {
+                if (stop == null) throw new InvalidOperationException("无法停止本次启动的新版本，已保留应用备份。");
+                if (!stop.WaitForExit(15000))
+                {
+                    stop.Kill();
+                    stop.WaitForExit();
+                    throw new InvalidOperationException("停止新版本超时，已保留应用备份。");
+                }
+                if (stop.ExitCode != 0 && !process.HasExited) throw new InvalidOperationException("无法停止本次启动的新版本，已保留应用备份。");
+            }
+        }
+        if (!process.WaitForExit(10000)) throw new InvalidOperationException("新版本仍未退出，已保留应用备份。");
     }
 
     private static void extract(string tar, string archive, string stage)

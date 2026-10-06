@@ -2,26 +2,35 @@
   <nodeSkeleton
     v-bind="nodeProps"
     :topVisible="node.selected"
+    :bottomVisible="node.selected && editor?.mode === 'inpaint'"
+    :bottomWidth="660"
     topWidth="max-content"
     :downloadUrl="previewUrl"
     :downloadName="outputFile?.url.split(/[\\/]/).at(-1)"
     @fullscreen="previewVisible = true"
     :style="{ width: previewUrl && imageWidth ? `${imageWidth + 18}px` : undefined }">
+    <template v-if="editor?.mode" #top><div ref="paintToolbar" /></template>
     <template #topActions>
+      <el-button :icon="IconBrush" :disabled="uploading || !previewUrl || gridSplit?.splitting" text title="局部重绘" aria-label="局部重绘" @click.stop="editor?.start('inpaint')">局部重绘</el-button>
+      <el-button :icon="IconLayoutGrid" :disabled="uploading || !previewUrl" :loading="gridSplit?.splitting" text title="宫格切分" aria-label="宫格切分" @click.stop="gridSplit?.open($event)">宫格切分</el-button>
       <el-button
         :icon="IconTransfer"
         :loading="uploading"
         text
         title="替换图片"
         aria-label="替换图片"
-        @click.stop="fileInput?.click()" />
+        @click.stop="fileInput?.click()">替换图片</el-button>
+    </template>
+    <template #topRightActions>
+      <el-button :icon="IconPencil" :disabled="uploading || !previewUrl || gridSplit?.splitting" text title="标记" aria-label="标记" @click.stop="editor?.start('mark')" />
     </template>
     <div class="imageContent nopan">
-      <img
+      <imageEditor
         v-if="previewUrl"
-        class="imagePreview"
+        ref="editor"
         :src="previewUrl"
-        draggable="false"
+        :toolbarTarget="paintToolbar"
+        :disabled="uploading"
         alt="节点图片"
         @load="resizeImage"
         @error="ElMessage.error('无法预览该图片')" />
@@ -38,7 +47,12 @@
         <icon-upload v-if="!uploading" :size="48" stroke="1.5" />
       </el-button>
     </div>
+    <template v-if="editor?.mode === 'inpaint'" #bottom>
+      <div ref="inpaintTarget" />
+    </template>
   </nodeSkeleton>
+  <imageInpaintPrompt v-if="editor?.mode === 'inpaint'" ref="inpaintPrompt" :target="inpaintTarget" :generate="generateInpaint" :disabled="uploading" />
+  <imageGridSplit ref="gridSplit" :src="previewUrl" :disabled="uploading" :active="node.selected" />
   <el-image-viewer
     v-if="previewVisible && previewUrl"
     :urlList="[previewUrl]"
@@ -48,19 +62,30 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
-import { IconPhoto, IconUpload, IconTransfer } from "@tabler/icons-vue";
+import { IconPhoto, IconUpload, IconTransfer, IconLayoutGrid, IconBrush, IconPencil } from "@tabler/icons-vue";
 import { ElButton, ElImageViewer, ElMessage } from "element-plus";
-import { nodeSkeleton, nodeTools, useNode, z, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
+import { nodeSkeleton, nodeTools, useNode, z, type NodeHandle, type NodeImageRequest } from "@toonflow/nodes-scaffold/runtime";
+import imageGridSplit from "@toonflow/nodes-scaffold/imageGridSplit";
+import imageEditor from "@toonflow/nodes-scaffold/imageEditor";
+import imageInpaintPrompt from "@toonflow/nodes-scaffold/imageInpaintPrompt";
 
 defineOptions({
   inheritAttrs: false,
   icon: IconPhoto,
-  handles: [{ id: "image", type: "source", dataType: "IMAGE", label: "图片输出" }] satisfies NodeHandle[],
+  handles: [
+    { id: "in", type: "target", dataType: "IMAGE", label: "来源图片" },
+    { id: "image", type: "source", dataType: "IMAGE", label: "图片输出" },
+  ] satisfies NodeHandle[],
 });
 const { node, nodeProps, outputs, nodeEvent, files, updateNodeInternals } = useNode({
   label: "图片",
 });
 const fileInput = ref<HTMLInputElement>();
+const gridSplit = ref<InstanceType<typeof imageGridSplit>>();
+const editor = ref<InstanceType<typeof imageEditor>>();
+const paintToolbar = ref<HTMLElement>();
+const inpaintPrompt = ref<InstanceType<typeof imageInpaintPrompt>>();
+const inpaintTarget = ref<HTMLElement>();
 const uploading = ref(false);
 const previewVisible = ref(false);
 const imageWidth = ref(0);
@@ -72,10 +97,10 @@ const previewUrl = files.useFileUrl(
 );
 
 nodeEvent.on("save", () => {
-  if (uploading.value) throw new Error("图片处理中，请完成后再切换或刷新节点");
+  if (uploading.value || editor.value?.busy || inpaintPrompt.value?.generating) throw new Error("图片处理中，请完成后再切换或刷新节点");
 });
 nodeEvent.on("delete", () => {
-  if (uploading.value) throw new Error("图片上传中，请稍后删除节点");
+  if (uploading.value || editor.value?.busy || inpaintPrompt.value?.generating) throw new Error("图片处理中，请稍后删除节点");
   uploading.value = true;
   return files.removeNodeFiles().finally(() => {
     uploading.value = false;
@@ -91,7 +116,7 @@ nodeTools.register({
   }),
   async execute({ path, mimeType }, { signal }) {
     signal?.throwIfAborted();
-    if (uploading.value) throw new Error("图片处理中，请稍后重试");
+    if (uploading.value || editor.value?.busy || inpaintPrompt.value?.generating) throw new Error("图片处理中，请稍后重试");
     uploading.value = true;
     try {
       const content = await files.getWorkspaceFiles().read(path);
@@ -111,6 +136,14 @@ async function resizeImage(event: Event) {
   imageWidth.value = 240 * image.naturalWidth / image.naturalHeight;
   await nextTick();
   updateNodeInternals();
+}
+
+async function generateInpaint(input: Omit<NodeImageRequest, "directory" | "outputDirectory" | "images">, signal: AbortSignal) {
+  if (!editor.value) throw new Error("请先进入局部重绘");
+  const value = await editor.value.generate(input, signal);
+  signal.throwIfAborted();
+  outputs.value.image = { dataType: "IMAGE", value };
+  editor.value?.cancel();
 }
 
 async function uploadImage(event: Event) {
@@ -141,14 +174,6 @@ function showError(error: unknown, fallback: string) {
 <style scoped lang="scss">
 .imageContent {
   min-height: 144px;
-
-  .imagePreview {
-    display: block;
-    width: 100%;
-    max-height: 240px;
-    object-fit: contain;
-    border-radius: var(--el-border-radius-base);
-  }
 
   .fileInput {
     display: none;

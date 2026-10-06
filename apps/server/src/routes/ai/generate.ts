@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Context, Message } from "@earendil-works/pi-ai";
 import { validateFields } from "@/lib/middleware";
 import u from "@/utils";
+import { translateError, translateMessage, validationOptions } from "@/lib/i18n";
 
 const textPart = z.object({ type: z.literal("text"), text: z.string(), textSignature: z.string().optional() });
 const imagePart = z.object({ type: z.literal("image"), data: z.string(), mimeType: z.string().startsWith("image/") });
@@ -58,7 +59,7 @@ const inputSchema = z.object({
 });
 
 export default Router().post("/", validateFields(inputSchema.shape), async (req, res) => {
-  const input = inputSchema.parse(req.body);
+  const input = inputSchema.parse(req.body, validationOptions());
   const configured = u.ai.getConfiguredModel(input.providerId, input.modelId);
   const controller = new AbortController();
   const close = () => controller.abort();
@@ -84,7 +85,7 @@ export default Router().post("/", validateFields(inputSchema.shape), async (req,
       if (message.stopReason === "error" || message.stopReason === "aborted") throw new Error(message.errorMessage || "模型请求失败");
       send({ type: "done", message });
     } catch (error) {
-      send({ type: "error", message: error instanceof Error ? error.message : "模型请求失败" });
+      send({ type: "error", message: error instanceof Error ? translateError(error) : translateMessage("模型请求失败") });
     } finally {
       res.end();
     }

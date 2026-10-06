@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="TF-Router 充值" :width="payment && payType === 'alipay' ? 'min(960px, calc(100vw - 32px))' : 'min(480px, calc(100vw - 32px))'" alignCenter appendToBody destroyOnClose :closeOnClickModal="false">
+  <el-dialog v-model="visible" title="TF-Router 充值" width="min(480px, calc(100vw - 32px))" alignCenter appendToBody destroyOnClose :closeOnClickModal="false">
     <div class="rechargeContent">
       <el-form v-if="!payment" labelPosition="top" :disabled="creating" @submit.prevent="createPayment">
         <el-form-item label="充值套餐">
@@ -38,11 +38,8 @@
             <el-text>使用微信扫码支付</el-text>
           </template>
           <template v-else>
-            <iframe class="paymentFrame" :src="paymentLink" title="支付宝支付页面" sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" />
-            <div class="paymentFallback">
-              <el-text size="small" type="info">页面无法显示或无法支付？</el-text>
-              <el-button tag="a" :href="paymentLink" target="_blank" rel="noopener noreferrer" text type="primary" :icon="IconExternalLink">打开支付页面</el-button>
-            </div>
+            <el-text>请在浏览器中完成支付宝支付</el-text>
+            <el-button tag="a" :href="paymentLink" target="_blank" rel="noopener noreferrer" text type="primary" :icon="IconExternalLink">打开支付页面</el-button>
           </template>
         </template>
         <el-alert v-else title="订单已创建，但接口未返回有效的支付链接" type="warning" :closable="false" showIcon />
@@ -50,7 +47,7 @@
           <el-text size="small" type="info">订单号</el-text>
           <span>{{ payment.orderNumber }}</span>
         </div>
-        <el-text size="small" type="info">支付后关闭窗口，将自动刷新账户余额。</el-text>
+        <el-text size="small" type="info">完成支付后，关闭此充值弹窗以刷新账户余额。</el-text>
       </div>
       <el-alert v-if="errorMessage" :title="errorMessage" type="error" :closable="false" showIcon />
     </div>
@@ -64,6 +61,7 @@
 
 <script setup lang="ts">
 import axios from "axios";
+import { locale } from "@toonflow/i18n/vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { IconBrandAlipay, IconBrandWechat, IconCreditCard, IconExternalLink, IconRefresh } from "@tabler/icons-vue";
 import tf, { type TfPayment, type TfPayParams, type TfRechargeSku } from "@/lib/tf";
@@ -80,7 +78,7 @@ const payment = ref<TfPayment>();
 const paymentAmount = ref(0);
 const creating = ref(false);
 const errorMessage = ref("");
-const moneyFormat = new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" });
+const moneyFormat = computed(() => new Intl.NumberFormat(locale.value, { style: "currency", currency: "CNY" }));
 const selectedAmount = computed(() => selectedSkuId.value === -1 ? amount.value : skus.value.find(sku => sku.id === selectedSkuId.value)?.price);
 const canPay = computed(() => !!props.apiKey.trim() && !loadingSkus.value && typeof selectedAmount.value === "number"
   && Number.isFinite(selectedAmount.value) && selectedAmount.value >= 0.01 && (selectedSkuId.value !== -1 || selectedAmount.value <= 50000));
@@ -88,7 +86,6 @@ const paymentLink = computed(() => {
   const url = payment.value?.payUrl;
   return url && URL.canParse(url) && ["http:", "https:"].includes(new URL(url).protocol) ? url : "";
 });
-// ACT: 跨域 iframe 即使被拦截也会触发 load；保留用户点击的外部入口，不据此自动跳转。
 let controller: AbortController | undefined;
 let skuController: AbortController | undefined;
 
@@ -128,6 +125,7 @@ async function createPayment() {
     if (request.signal.aborted) return;
     paymentAmount.value = money;
     payment.value = result;
+    if (payType.value === "alipay" && paymentLink.value) window.open(paymentLink.value, "_blank", "noopener,noreferrer");
   } catch (error) {
     if (!request.signal.aborted) {
       errorMessage.value = axios.isAxiosError<{ message?: string }>(error)
@@ -242,22 +240,6 @@ onBeforeUnmount(() => {
       padding: 8px;
       background: #ffffff;
       border-radius: var(--el-border-radius-base);
-    }
-
-    .paymentFrame {
-      width: 100%;
-      height: min(56vh, 560px);
-      border: 0;
-      background: #ffffff;
-      border-radius: var(--el-border-radius-base);
-    }
-
-    .paymentFallback {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: center;
-      gap: 4px;
     }
 
     .orderInfo {

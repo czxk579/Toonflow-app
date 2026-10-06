@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "@toonflow/file";
 import { resolve } from "node:path";
 
 const projectDir = resolve(import.meta.dir, "../../..");
@@ -45,6 +45,7 @@ if (!isMac) {
 for (const script of mode === "dev" ? ["dev:plugins"] : [
   "build:tools",
   "build:nodes",
+  "build:ext",
   // "build:teams",
 ]) {
   await $`${process.execPath} run ${script}`.cwd(projectDir);

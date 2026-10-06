@@ -28,7 +28,7 @@ type TfPlugin = {
   identifier: string;
   userId: number;
   supplier: string;
-  type: "node" | "skill" | "tool" | "agent";
+  type: "node" | "skill" | "tool" | "agent" | "ext";
   state: number;
   desc: string;
   link: string;
@@ -44,7 +44,7 @@ type TfPlugin = {
 type TfPluginParams = {
   page: number;
   limit: number;
-  type: "all" | "node" | "skill" | "tool" | "agent" | "my" | "collection";
+  type: "all" | "node" | "skill" | "tool" | "agent" | "ext" | "my" | "collection";
   searchKeyword?: string;
 };
 

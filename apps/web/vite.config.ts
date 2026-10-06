@@ -5,6 +5,7 @@ import components from "unplugin-vue-components/vite";
 import { ElementPlusResolver } from "unplugin-vue-components/resolvers";
 import desktopConfig from "../../electrobun.config.ts";
 import postcssConfig from "../../postcss.config.ts";
+import { i18nPlugin } from "@toonflow/i18n/vite";
 
 export default defineConfig({
   css: { postcss: postcssConfig },
@@ -37,6 +38,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
   plugins: [
+    i18nPlugin(),
     vue(),
     components({
       globsExclude: ["src/components/settings/panels/**/*Dialog.vue"],

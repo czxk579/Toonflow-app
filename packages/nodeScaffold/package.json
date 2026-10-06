@@ -12,12 +12,17 @@
     "./nodeInputs": "./src/nodeInputs.ts",
     "./utils": "./src/nodeInputs.ts",
     "./nodeEvent": "./src/nodeEvent.ts",
+    "./nodeDocument": "./src/nodeDocument.ts",
     "./nodeAi": "./src/nodeAi.ts",
     "./nodeFfmpeg": "./src/nodeFfmpeg.ts",
     "./workspaceFiles": "./src/workspaceFiles.ts",
     "./nodeTools": "./src/nodeTools.ts",
     "./promptInput": "./src/components/promptInput.vue",
     "./videoPlayer": "./src/components/videoPlayer.vue",
+    "./mediaHistory": "./src/components/mediaHistory.vue",
+    "./imageGridSplit": "./src/components/imageGridSplit.vue",
+    "./imageEditor": "./src/components/imageEditor.vue",
+    "./imageInpaintPrompt": "./src/components/imageInpaintPrompt.vue",
     "./referenceItem": "./src/components/referenceItem.vue"
   },
   "scripts": {
@@ -29,6 +34,7 @@
     "element-plus": "^2.14.5"
   },
   "dependencies": {
+    "@toonflow/file": "workspace:*",
     "@toonflow/ffmpeg": "workspace:*",
     "@earendil-works/pi-agent-core": "0.85.1",
     "@earendil-works/pi-ai": "0.85.1",

@@ -1,7 +1,7 @@
 import type { Rule } from "@form-create/element-ui";
 import type { Raw } from "vue";
 
-export type PluginType = "node" | "skill" | "tool" | "agent";
+export type PluginType = "node" | "skill" | "tool" | "agent" | "ext";
 
 export interface Plugin {
   key: string;
@@ -17,6 +17,7 @@ export interface Plugin {
   version?: string;
   enabled?: boolean;
   canConfigure?: boolean;
+  canManage?: boolean;
   configRules?: Raw<Rule[]>;
   config?: Record<string, unknown>;
   url?: string;

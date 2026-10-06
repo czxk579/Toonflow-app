@@ -31,7 +31,7 @@
           </el-select>
           <el-badge isDot :hidden="!hasDesktopUpdate">
             <el-button size="small" type="primary" plain :loading="checking" :disabled="sourceSaving" @click="openUpdate">
-              {{ snapshot?.updateReady ? "更新已就绪" : snapshot?.updating || action === "download" ? "查看更新进度" : "检查更新" }}
+              {{ snapshot?.installFailure ? "查看更新失败原因" : snapshot?.updateReady ? "更新已就绪" : snapshot?.updating || action === "download" ? "查看更新进度" : "检查更新" }}
             </el-button>
           </el-badge>
         </div>
@@ -39,6 +39,12 @@
       <div v-if="snapshot?.hash" class="buildInfo">
         <span>构建标识</span>
         <code>{{ snapshot.hash }}</code>
+      </div>
+      <div v-if="snapshot?.installFailure" class="installFailureNotice" role="alert">
+        <strong>上次更新未成功</strong>
+        <p>{{ snapshot.installFailure.message }}</p>
+        <p>请前往 GitHub 最新发布页，选择适合当前系统的完整安装包，关闭客户端后重新安装。</p>
+        <el-button tag="a" type="primary" size="small" :href="snapshot.installFailure.downloadUrl" target="_blank" rel="noopener noreferrer">前往下载页</el-button>
       </div>
     </el-card>
 
@@ -165,8 +171,10 @@
       </div>
       <template #footer>
         <el-button size="small" @click="resultVisible = false">关闭</el-button>
+        <el-button v-if="snapshot?.installFailure" tag="a" type="primary" size="small" :href="snapshot.installFailure.downloadUrl" target="_blank" rel="noopener noreferrer">前往下载页</el-button>
+        <el-button v-else-if="snapshot?.updating && !working" size="small" type="primary" @click="runUpdate('read')">重新读取状态</el-button>
         <el-button
-          v-if="snapshot?.canUpdate && snapshot.updateAvailable"
+          v-else-if="snapshot?.canUpdate && snapshot.updateAvailable"
           size="small"
           type="primary"
           :loading="working"
@@ -179,7 +187,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref, watch } from "vue";
+import { translate, t } from "@toonflow/i18n/vue";
+
+import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref } from "vue";
 import axios from "axios";
 import { ElMessage } from "element-plus";
 import { QRCode } from "tdesign-vue-next";
@@ -198,17 +208,16 @@ import {
 } from "@tabler/icons-vue";
 import logoUrl from "@toonflow/assets/logo.svg";
 import tf, { type TfSponsor } from "@/lib/tf";
-import type { updateSnapshot } from "@toonflow/server/desktop";
 import { saveSettings } from "@/stores/settings";
 import {
   desktopUpdateSource as updateSource,
   desktopUpdateCustomUrl as customUpdateUrl,
-  desktopUpdateKey as updateKey,
   desktopUpdateSnapshot as snapshot,
   desktopUpdateError as updateError,
+  desktopUpdateAction as action,
   desktopUpdateChecking,
   hasDesktopUpdate,
-  checkDesktopUpdate,
+  runDesktopUpdate,
 } from "@/stores/desktopUpdate";
 
 const messageMarkdown = defineAsyncComponent(() => import("@/components/messageMarkdown.vue"));
@@ -216,29 +225,32 @@ const repositoryUrl = "https://github.com/HBAI-Ltd/Toonflow-app";
 const communityUrl = "https://work.weixin.qq.com/u/vc36adcc89845edcbe?v=5.0.3.63936&bb=85b8d228e8";
 const isDesktop = new URLSearchParams(window.location.search).get("desktop") === "1";
 const currentVersion = computed(() => snapshot.value?.version || import.meta.env.appVersion);
-const action = ref<"check" | "download" | "apply" | null>(null);
 const sourceSaving = ref(false);
-const checking = computed(() => desktopUpdateChecking.value || action.value === "check");
-const working = computed(() => checking.value || !!action.value || !!snapshot.value?.updating);
+const checking = computed(() => desktopUpdateChecking.value);
+const working = computed(() => !!action.value);
 const resultVisible = ref(false);
 const activeSponsorId = ref<number>();
 const controller = new AbortController();
 const resultTitle = computed(() => {
-  if (updateError.value) return "更新未完成";
-  if (checking.value) return "正在检查更新";
-  if (action.value === "apply") return "正在重启并更新";
-  if (working.value) return "正在准备更新";
-  if (snapshot.value?.updateReady) return "更新已准备完成";
-  return snapshot.value?.updateAvailable ? "发现新版本" : "暂无更新";
+  if (snapshot.value?.installFailure) return translate("上次更新未成功");
+  if (updateError.value) return translate("更新未完成");
+  if (checking.value) return translate("正在检查更新");
+  if (action.value === "read") return translate("正在读取更新状态");
+  if (action.value === "apply") return translate("正在重启并更新");
+  if (working.value) return translate("正在准备更新");
+  if (snapshot.value?.updateReady) return translate("更新已准备完成");
+  return snapshot.value?.updateAvailable ? translate("发现新版本") : translate("暂无更新");
 });
 const resultMessage = computed(() => {
+  if (snapshot.value?.installFailure) return snapshot.value.installFailure.message;
   if (updateError.value) return updateError.value;
-  if (checking.value) return "正在获取最新版本信息…";
-  if (action.value === "apply") return "客户端即将关闭，更新完成后会自动重新打开。";
-  if (working.value) return "正在下载并校验更新包，可以关闭此弹窗继续使用。";
-  if (snapshot.value?.updateReady) return "点击“重启并更新”安装新版本，请先完成正在进行的任务。";
-  if (!snapshot.value?.updateAvailable) return `当前已是最新版本 v${currentVersion.value}`;
-  return snapshot.value.canUpdate ? "有新的版本可用，下载完成后可重启更新。" : "当前客户端不支持应用内更新，请下载安装包。";
+  if (checking.value) return translate("正在获取最新版本信息…");
+  if (action.value === "read") return translate("正在确认客户端的更新状态，请稍候…");
+  if (action.value === "apply") return translate("客户端即将关闭，更新完成后会自动重新打开。");
+  if (working.value) return translate("正在下载并校验更新包，可以关闭此弹窗继续使用。");
+  if (snapshot.value?.updateReady) return translate("点击“重启并更新”安装新版本，请先完成正在进行的任务。");
+  if (!snapshot.value?.updateAvailable) return t`当前已是最新版本 v${currentVersion.value}`;
+  return snapshot.value.canUpdate ? translate("有新的版本可用，下载完成后可重启更新。") : translate("当前客户端不支持应用内更新，请下载安装包。");
 });
 
 const sponsors = ref<TfSponsor[]>([]);
@@ -252,43 +264,14 @@ onMounted(async () => {
 });
 
 onMounted(async () => {
-  if (!isDesktop || desktopUpdateChecking.value) return;
-  const previous = snapshot.value;
-  const source = updateKey.value;
+  if (!isDesktop) return;
   try {
-    const { data } = await axios.get<{ data: updateSnapshot }>("/api/desktop/update", { signal: controller.signal, timeout: 10000 });
-    if (snapshot.value === previous && updateKey.value === source && !sourceSaving.value && !action.value && !desktopUpdateChecking.value) {
-      snapshot.value = data.data;
-      updateError.value = data.data.error;
-    }
+    await runDesktopUpdate("read");
   } catch {
     // ACT: 状态读取失败仍显示构建版本；检查按钮会展示具体错误。
   }
 });
 onBeforeUnmount(() => controller.abort());
-
-watch([resultVisible, () => snapshot.value?.updating, action], ([visible, updating, currentAction], _, onCleanup) => {
-  if ((!visible && currentAction !== "apply") || !updating || (currentAction && currentAction !== "apply")) return;
-  // ACT: 下载请求自行返回结果；重启交接后继续同步，捕获宿主退出失败。
-  let refreshing = false;
-  const timer = setInterval(async () => {
-    if (refreshing) return;
-    refreshing = true;
-    try {
-      const { data } = await axios.get<{ data: updateSnapshot }>("/api/desktop/update", { signal: controller.signal, timeout: 10000 });
-      snapshot.value = data.data;
-      updateError.value = data.data.error;
-      if (data.data.error && action.value === "apply") action.value = null;
-    } catch (error) {
-      if (controller.signal.aborted) return;
-      if (action.value === "apply" && axios.isAxiosError(error) && error.code === "ERR_NETWORK") clearInterval(timer);
-      else updateError.value = getUpdateError(error);
-    } finally {
-      refreshing = false;
-    }
-  }, 1500);
-  onCleanup(() => clearInterval(timer));
-});
 
 function setSponsorVisible(id: number, visible: boolean) {
   if (visible || activeSponsorId.value === id) activeSponsorId.value = visible ? id : undefined;
@@ -302,7 +285,7 @@ function closeSponsor(event: KeyboardEvent) {
 
 function openUpdate() {
   resultVisible.value = true;
-  if (working.value || snapshot.value?.updateReady) return;
+  if (working.value || snapshot.value?.updateReady || snapshot.value?.installFailure) return;
   void runUpdate("check");
 }
 
@@ -323,37 +306,18 @@ function getUpdateError(error: unknown) {
   return axios.isAxiosError<{ message?: string }>(error) ? error.response?.data?.message || error.message : String(error);
 }
 
-async function runUpdate(nextAction: "check" | "download" | "apply") {
+async function runUpdate(nextAction: "read" | "check" | "download" | "apply") {
   if (working.value || sourceSaving.value) return;
   updateError.value = "";
   if (!isDesktop) {
     updateError.value = "请在桌面客户端中检查更新。";
     return;
   }
-  action.value = nextAction;
   try {
-    if (nextAction === "check") await checkDesktopUpdate();
-    else {
-      const { data } = await axios.post<{ data: updateSnapshot }>(`/api/desktop/update/${nextAction}`, null, {
-        headers: { "x-toonflow-desktop": "1" },
-        signal: controller.signal,
-        timeout: 0,
-      });
-      snapshot.value = data.data;
-    }
-    updateError.value = snapshot.value?.error || (snapshot.value?.channel === "dev" ? "开发版本不提供更新检查，请使用正式桌面客户端。" : "");
-  } catch (error) {
-    if (!controller.signal.aborted) {
-      updateError.value = getUpdateError(error);
-      try {
-        const { data } = await axios.get<{ data: updateSnapshot }>("/api/desktop/update", { signal: controller.signal, timeout: 10000 });
-        snapshot.value = data.data;
-      } catch {
-        // ACT: 状态读取失败时保留本次操作的错误，不覆盖诊断信息。
-      }
-    }
-  } finally {
-    if (nextAction !== "apply" || updateError.value) action.value = null;
+    await runDesktopUpdate(nextAction);
+    if (snapshot.value?.channel === "dev") updateError.value = "开发版本不提供更新检查，请使用正式桌面客户端。";
+  } catch {
+    // 错误与交接状态由全局 Store 保留，关闭面板不取消更新观察。
   }
 }
 </script>
@@ -471,6 +435,16 @@ async function runUpdate(nextAction: "check" | "download" | "apply") {
       code {
         overflow-wrap: anywhere;
       }
+    }
+
+    .installFailureNotice {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: var(--ui-radius);
+      background: var(--el-color-danger-light-9);
+
+      strong { color: var(--el-color-danger); }
+      p { margin: 8px 0 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
     }
 
     &.repositoryCard {

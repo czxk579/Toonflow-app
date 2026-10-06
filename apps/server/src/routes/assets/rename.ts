@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { basename, dirname, resolve } from "node:path";
 import { z } from "zod";
 import u from "@/utils";
 import { validateFields } from "@/lib/middleware";
@@ -12,6 +13,7 @@ export default router.post("/", validateFields({ path: z.string().min(1).max(409
   const target = await u.workspaceFile.resolveWorkspacePath(root, req.body.target);
   u.workspaceFile.protectWorkspaceRoot(source.directory, source.path);
   u.workspaceFile.protectWorkspaceRoot(target.directory, target.path);
+  target.path = resolve(dirname(target.path), basename(resolve(root, req.body.target)));
   const release = u.workspaceFile.lockWorkspaceFiles([source.path, target.path]);
   try { await u.workspaceFile.renameWorkspaceFile(source.path, target.path); }
   finally { release(); }

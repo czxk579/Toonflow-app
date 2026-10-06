@@ -3,15 +3,15 @@
     <el-form v-loading="loading" labelPosition="top" :disabled="loading || saving" @submit.prevent="save">
       <el-form-item label="允许外部 Agent 调用本地团队"><el-switch v-model="enabled" aria-label="开启 A2A 服务" /></el-form-item>
       <el-form-item label="授权工作区">
-        <div class="directoryField"><el-input v-model="directory" placeholder="选择允许团队操作的工作区" /><workspacePicker v-model="directory" :disabled="loading || saving" /></div>
+        <div class="directoryField"><el-input v-model="directory" dir="ltr" placeholder="选择允许团队操作的工作区" /><workspacePicker v-model="directory" :disabled="loading || saving" /></div>
       </el-form-item>
       <el-form-item label="文本模型">
         <el-select v-model="selectedModel" placeholder="选择团队使用的文本模型" filterable style="width: 100%">
           <el-option v-for="model in modelChoices" :key="model.value" :value="model.value" :label="model.label" />
         </el-select>
       </el-form-item>
-      <el-form-item v-if="url" label="服务地址"><el-input :modelValue="url" readonly /></el-form-item>
-      <el-form-item v-if="token" label="访问令牌"><el-input :modelValue="token" type="password" showPassword readonly autocomplete="off" /></el-form-item>
+      <el-form-item v-if="url" label="服务地址"><el-input :modelValue="url" dir="ltr" readonly /></el-form-item>
+      <el-form-item v-if="token" label="访问令牌"><el-input :modelValue="token" type="password" dir="ltr" showPassword readonly autocomplete="off" /></el-form-item>
       <el-text size="small" type="info">保存开启后，本地团队卡片可复制各自的 Agent Card 地址。外部调用使用访问令牌，仅操作这里授权的工作区。</el-text>
       <el-alert v-if="error" class="settingsError" :title="error" type="error" :closable="false" showIcon />
     </el-form>

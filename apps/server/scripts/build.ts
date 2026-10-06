@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { cp, rm } from "node:fs/promises";
+import { cp, rm } from "@toonflow/file";
 import { resolve } from "node:path";
 
 const projectDir = resolve(import.meta.dirname, "../../..");

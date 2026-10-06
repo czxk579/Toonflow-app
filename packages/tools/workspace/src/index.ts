@@ -1,4 +1,3 @@
-import { access, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { z } from "zod";
 import type { ToolDefinition, ToolPlugin } from "@toonflow/tools-scaffold/runtime";
 
@@ -6,29 +5,30 @@ const configSchema = z.object({ readOnly: z.boolean().default(false) }).strict()
 
 const plugin: ToolPlugin = {
   validateConfig: config => configSchema.parse(config),
-  createTools({ cwd, config, resolvePath, writeFile, sdk }) {
+  createTools({ cwd, config, files, sdk }) {
     const { readOnly } = configSchema.parse(config);
-    const read = async (path: string, readOnly = false) => readFile(await resolvePath(path, readOnly));
-    const checkAccess = async (path: string, readOnly = false) => access(await resolvePath(path, readOnly));
     const tools: ToolDefinition[] = [
       sdk.defineTool(sdk.createReadToolDefinition(cwd, { operations: {
-        readFile: path => read(path, true),
-        access: path => checkAccess(path, true),
-        detectImageMimeType: async path => sdk.detectSupportedImageMimeTypeFromFile(await resolvePath(path, true)),
+        readFile: path => files.readFile(path, true),
+        access: path => files.access(path, true),
+        detectImageMimeType: path => files.detectImageMimeType(path, true),
       } })),
       sdk.defineTool(sdk.createLsToolDefinition(cwd, { operations: {
-        exists: async path => { await resolvePath(path, true); return true; },
-        stat: async path => stat(await resolvePath(path, true)),
-        readdir: async path => readdir(await resolvePath(path, true)),
+        exists: async path => {
+          try { await files.access(path, true); return true; }
+          catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+        },
+        stat: path => files.stat(path, true),
+        readdir: path => files.readdir(path, true),
       } })),
     ];
     if (!readOnly) {
       tools.splice(1, 0,
         sdk.defineTool(sdk.createWriteToolDefinition(cwd, { operations: {
-          writeFile,
-          mkdir: async path => { await mkdir(await resolvePath(path), { recursive: true }); },
+          writeFile: files.writeFile,
+          mkdir: path => files.mkdir(path, true),
         } })),
-        sdk.defineTool(sdk.createEditToolDefinition(cwd, { operations: { readFile: read, access: checkAccess, writeFile } })),
+        sdk.defineTool(sdk.createEditToolDefinition(cwd, { operations: { readFile: files.readFile, access: files.access, writeFile: files.writeFile } })),
       );
     }
     return tools.map(tool => ({

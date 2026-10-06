@@ -10,6 +10,7 @@ export default {
       "../../build/web": "views/mainview",
       "../../build/tools": "tools",
       "../../build/nodes": "nodes",
+      "../../build/ext": "ext",
       "../../packages/providers/src": "providers",
       "../../packages/skills": "skills",
       "../../packages/startup/assets/startup.json": "startup/startup.json",

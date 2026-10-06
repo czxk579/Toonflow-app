@@ -76,6 +76,8 @@ interface FfmpegRequiredError extends Error {
 
 interface ProviderTools {
   fetch: typeof globalThis.fetch;
+  /** 提取供应商错误正文中的可读原因，并隐藏配置中的密钥和 URL 查询参数。 */
+  errorMessage(value: unknown): string;
   hash: typeof Bun.hash;
   image: typeof Bun.Image;
   /**
@@ -134,20 +136,37 @@ interface VideoRequest extends MediaRequest {
   watermark?: boolean;
 }
 
-interface AudioRequest extends MediaRequest {
-  text: string;
-  audios?: MediaInput[];
-  /** 音色标识，由供应商映射到平台的音色参数。 */
+/** 基础音频生成参数；text、prompt 至少提供一项，非空校验与模型能力检查由供应商负责。 */
+type AudioRequest = MediaRequest & {
+  /** 待朗读的文本，用于文本转语音。 */
+  text?: string;
+  /** 音频创作或语音风格提示词，可与待朗读的 text 分开传入。 */
+  prompt?: string;
+  /** 参考音频，可附带该段音频的准确转写文本；上传或复刻流程由供应商处理。 */
+  audios?: (MediaInput & { text?: string })[];
+  /** 音频创作参考图；数量以及能否与参考音频同传，由供应商按模型校验。 */
+  images?: MediaInput[];
+  /** 系统或已复刻的音色标识，由供应商映射到平台的音色参数。 */
   voice?: string;
-  /** 语速倍率，1 为正常语速。 */
+  /** 语速倍率，1 为正常语速；供应商负责转换平台的语速刻度。 */
   speed?: number;
-  /** 音量增益，单位 dB，0 为原始音量。 */
+  /** 音量增益，单位 dB，0 为原始音量；供应商负责转换平台的音量刻度。 */
   volume?: number;
-  /** 输出编码格式，如 mp3、wav、pcm。 */
+  /** 抽象层以半音表示音调偏移，0 为原音调；供应商负责映射平台刻度并校验支持范围。 */
+  pitch?: number;
+  /** 情绪，如 happy、sad、angry；由供应商映射并校验模型及音色是否支持。 */
+  emotion?: string;
+  /** 合成语言或方言，如 zh-CN、en、yue；由供应商映射，缺省沿用模型默认行为。 */
+  language?: string;
+  /** 是否规范化数字等文本的读法；支持语种与处理规则由供应商按模型校验。 */
+  normalizeText?: boolean;
+  /** 输出编码格式，如 mp3、wav、pcm、flac、opus；由供应商映射平台的格式名称。 */
   format?: string;
   /** 输出采样率，单位 Hz。 */
   sampleRate?: number;
-}
+  /** 输出编码码率，单位 kbps；仅适用于支持配置码率的格式，由供应商转换平台单位。 */
+  bitrateKbps?: number;
+} & ({ text: string } | { prompt: string });
 
 /**
  * 三种生成函数统一返回最终媒体数组，不能返回任务 ID 或原始平台响应。

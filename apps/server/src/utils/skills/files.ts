@@ -1,5 +1,5 @@
 import { loadSkillsFromDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { lstat, readdir, readFile, realpath, rm } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, rm } from "@toonflow/file";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import conf from "@/utils/conf";
 import { isWithin, writeWorkspaceFile } from "@/utils/workspace/files";

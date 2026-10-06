@@ -1,18 +1,29 @@
 <template>
-  <div ref="senderElement" class="promptInput nodrag nopan nowheel" @keydown.capture="handleMentionKey" @click.capture="previewReference" />
+  <div class="promptInputWrap nodrag nopan nowheel">
+    <el-button v-if="expandable" class="expandButton" :icon="IconMaximize" text circle title="展开编辑提示词" aria-label="展开编辑提示词" @mousedown.prevent @click.stop="expanded = true" />
+    <teleport :to="expandedTarget || 'body'" :disabled="!expanded || !expandedTarget">
+      <div ref="senderElement" class="promptInput nodrag nopan nowheel" :class="{ expandedInput: expanded }" @keydown.capture="handleMentionKey" @click.capture="previewReference" />
+    </teleport>
+  </div>
+  <el-dialog v-if="expandable" v-model="expanded" class="promptEditorDialog" title="生成提示词" width="80%" alignCenter appendToBody :closeOnClickModal="false" @opened="sender?.focus('mark')" @close="expanded = false" @closed="sender?.focus('mark')">
+    <div ref="expandedTarget" class="promptExpandedTarget nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @dblclick.stop />
+  </el-dialog>
   <el-image-viewer v-if="previewUrl" :urlList="[previewUrl]" teleported @close="previewReferenceId = undefined" />
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { ElImageViewer, useZIndex } from "element-plus";
+import { computed, nextTick, ref, watch } from "vue";
+import { ElButton, ElDialog, ElImageViewer, useZIndex } from "element-plus";
+import { IconMaximize } from "@tabler/icons-vue";
 import xSender, { type AnyTagProps, type MentionItem } from "x-sender";
 import "x-sender/lib/XSender.css";
 
-const props = defineProps<{ references: (MentionItem & { value: string })[] }>();
+const props = defineProps<{ references: (MentionItem & { value: string })[]; expandable?: boolean; placeholder?: string }>();
 const model = defineModel<AnyTagProps[][]>({ required: true });
 const text = defineModel<string>("text", { default: "" });
 const senderElement = ref<HTMLElement>();
+const expanded = ref(false);
+const expandedTarget = ref<HTMLElement>();
 const { nextZIndex } = useZIndex();
 const previewReferenceId = ref<string>();
 const previewUrl = computed(() => String(props.references.find(item => item.id === previewReferenceId.value)?.avatar ?? ""));
@@ -172,7 +183,7 @@ watch(senderElement, (element, _previous, onCleanup) => {
   const initialModel: AnyTagProps[][] = model.value.length ? model.value : text.value.split("\n").map(text => [{ type: "Write", text }]);
   const instance = new xSender(element, {
     autoFocus: false,
-    placeholder: "描述一下生成风格提示词，输入 @ 引用参考",
+    placeholder: props.placeholder ?? "描述一下生成风格提示词，输入 @ 引用参考",
     chatStyle: { minHeight: "70px", maxHeight: "180px", fontSize: "14px", lineHeight: "1.6" },
     getPopupContainer: () => popup,
     mentionConfig: { dialogTitle: "选择参考", callEvery: false, options: props.references },
@@ -180,6 +191,15 @@ watch(senderElement, (element, _previous, onCleanup) => {
     keyboardWrapFun: event => event.key === "Enter" && !event.isComposing,
   });
   sender = instance;
+  // ACT: 弹窗只移动现有编辑器，保留参考标签、光标与撤销记录。
+  const stopExpandedWatch = watch([expanded, expandedTarget], async ([visible, target]) => {
+    instance.bus.emit(xSender.EventSet.EVENT_COMMON_DIALOG_CLOSE);
+    instance.updateConfig({ chatStyle: { minHeight: visible ? "100%" : "70px", maxHeight: visible ? "100%" : "180px" } });
+    if (!visible || !target) return;
+    await nextTick();
+    if (sender !== instance || !expanded.value) return;
+    popup.style.zIndex = String(nextZIndex());
+  });
   const editor = instance.chatElement.richText;
   // ACT: 1.4.6 未检查卸载节点和空 Range 矩形；只适配当前实例，升级到库内修复后可移除。
   const chatEditor = instance.chatEditor as typeof instance.chatEditor & {
@@ -240,6 +260,7 @@ watch(senderElement, (element, _previous, onCleanup) => {
   popup.addEventListener("click", selectReference, true);
   document.addEventListener("pointerdown", closeOutside, true);
   onCleanup(() => {
+    stopExpandedWatch();
     model.value = instance.getModel();
     releaseNodeFocus(instance);
     sender = undefined;
@@ -293,7 +314,37 @@ function handleMentionKey(event: KeyboardEvent) {
 }
 </script>
 
-<style scoped>
+<style scoped lang="scss">
+.promptInputWrap {
+  position: relative;
+  margin: 12px 0 16px;
+
+  .expandButton {
+    position: absolute;
+    top: 2px;
+    right: 10px;
+    z-index: 11;
+    width: 24px;
+    height: 24px;
+    padding: 4px;
+    color: var(--el-text-color-secondary);
+  }
+
+  &:has(.expandButton) .promptInput {
+    :deep(.chat-rich-text > [contenteditable]),
+    :deep(.chat-placeholder-wrap) { padding-right: 34px; }
+  }
+}
+
+:global(.promptEditorDialog) {
+  display: flex;
+  flex-direction: column;
+  height: 80vh;
+}
+
+:global(.promptEditorDialog .el-dialog__body) { flex: 1; min-height: 0; }
+.promptExpandedTarget { height: 100%; }
+
 .promptInput,
 :global(.textNodeMentions) {
   --chat-primary: var(--el-color-primary);
@@ -320,10 +371,14 @@ function handleMentionKey(event: KeyboardEvent) {
 
 .promptInput {
   display: block;
-  margin: 12px 0 16px;
   cursor: text;
   -webkit-user-select: text;
   user-select: text;
+
+  &.expandedInput {
+    height: 100%;
+    margin: 0;
+  }
 
   &:deep(.imageReference) {
     display: inline-flex;

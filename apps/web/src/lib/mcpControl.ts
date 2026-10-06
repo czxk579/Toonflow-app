@@ -1,3 +1,4 @@
+import { locale } from "@toonflow/i18n/vue";
 import { onScopeDispose, shallowRef, watch, type WatchSource } from "vue";
 import { useRouter } from "vue-router";
 import type { NodeToolInfo } from "@toonflow/tools-scaffold/runtime";
@@ -75,7 +76,7 @@ export function useMcpControl() {
       let revision = 0;
       async function post(path: "state" | "result", body: object, callSignal?: AbortSignal) {
         const response = await fetch(`/api/mcp/control/${path}`, {
-          method: "POST", headers: { ...headers, "Content-Type": "application/json" },
+          method: "POST", headers: { ...headers, "Content-Type": "application/json", "Accept-Language": locale.value },
           body: JSON.stringify({ connectionId, ...(path === "state" ? { revision: ++revision } : {}), ...body }), signal,
         });
         if (path === "result" && response.status === 404 && callSignal?.aborted) return;
@@ -156,7 +157,7 @@ export function useMcpControl() {
         }
       }
       try {
-        const response = await fetch(`/api/mcp/control/events?connectionId=${encodeURIComponent(connectionId)}`, { headers, signal });
+        const response = await fetch(`/api/mcp/control/events?connectionId=${encodeURIComponent(connectionId)}`, { headers: { ...headers, "Accept-Language": locale.value }, signal });
         if (!response.ok || !response.body) throw new Error(`MCP 连接失败（${response.status}）`);
         stopState = watch(() => JSON.stringify(getState()), state => {
           void post("state", { state: JSON.parse(state) }).catch(error => { if (!signal.aborted) connection.abort(error); });

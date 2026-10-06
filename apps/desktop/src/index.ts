@@ -1,16 +1,19 @@
+import { setLocaleFallback, t, translateMessage } from "@toonflow/server/i18n";
+import { detectLocale, normalizeLocale } from "@toonflow/i18n";
 import { once } from "node:events";
 import { execFile } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, writeAtomicSync } from "@toonflow/file";
+import { file } from "@toonflow/file/bun";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { dlopen, ptr } from "bun:ffi";
 import type { DesktopRuntime, PluginInstallRequest } from "@toonflow/server/desktop";
 import { showNativeSplash } from "@toonflow/startup";
-import Electrobun, { BrowserWindow, PATHS, Screen, Utils, Updater } from "electrobun/main";
+import Electrobun, { ApplicationMenu, BrowserWindow, PATHS, Screen, Utils, Updater } from "electrobun/main";
 import { parseInstallUrl } from "./protocol";
 import saveFile, { selectSaveFile } from "./saveFile";
-import createWindowsUpdater from "./update/windowsUpdater";
+import createWindowsUpdater, { confirmWindowsUpdateStartup } from "./update/windowsUpdater";
 
 const execFileAsync = promisify(execFile);
 const pendingInstalls: PluginInstallRequest[] = [];
@@ -19,7 +22,7 @@ function openUrl(url: string) {
   const request = parseInstallUrl(url);
   if (deliverInstall) deliverInstall(request);
   else if (!pendingInstalls.some(item => item.type === request.type && item.url === request.url)) {
-    if (pendingInstalls.length >= 20) throw new Error("待确认的安装请求过多，请稍后重试");
+    if (pendingInstalls.length >= 20) throw new Error(t`待确认的安装请求过多，请稍后重试`);
     pendingInstalls.push(request);
   }
 }
@@ -27,7 +30,7 @@ function openUrl(url: string) {
 Electrobun.events.on("open-url", event => {
   try { openUrl(event.data.url); }
   catch (error) {
-    void Utils.showMessageBox({ type: "error", title: "安装链接无效", message: error instanceof Error ? error.message : "无法打开安装链接" });
+    void Utils.showMessageBox({ type: "error", title: t`安装链接无效`, message: translateMessage(error instanceof Error ? error.message : "无法打开安装链接") });
   }
 });
 
@@ -36,7 +39,7 @@ async function restoreInstallRegistration(installDirectory: string) {
   if (process.platform === "win32" && existsSync(uninstaller)) {
     try {
       // SDK 启动和更新会重写卸载入口；安装了 NSIS 时统一交给它处理数据保留选项。
-      const { identifier, channel } = await Bun.file(resolve(PATHS.RESOURCES_FOLDER, "version.json")).json();
+      const { identifier, channel } = await file(resolve(PATHS.RESOURCES_FOLDER, "version.json")).json();
       const registryKey = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${identifier}.${channel}`;
       for (const [name, command] of [["UninstallString", `"${uninstaller}"`], ["QuietUninstallString", `"${uninstaller}" /S`]]) {
         await execFileAsync("reg.exe", ["add", registryKey, "/v", name, "/t", "REG_SZ", "/d", command, "/f"], { windowsHide: true });
@@ -76,10 +79,35 @@ async function start() {
     const installDirectory = resolve(PATHS.RESOURCES_FOLDER, process.platform === "darwin" ? "../../.." : "../..");
     const dataDirectory = process.env.TOONFLOW_DATA_DIR ?? resolve(installDirectory, "data");
     // ACT: 先显示原生动画，再加载服务，避免初始化期间没有反馈。
-    const startupSettings = await Bun.file(resolve(dataDirectory, "settings.json")).json().catch((error) => {
+    const startupSettings = await file(resolve(dataDirectory, "settings.json")).json().catch((error) => {
       if (error.code !== "ENOENT") console.error("读取启动设置失败，使用默认启动动画：", error);
       return null;
     });
+    setLocaleFallback(() => normalizeLocale(startupSettings?.settings?.ui?.language)
+      ?? detectLocale([Intl.DateTimeFormat().resolvedOptions().locale]));
+    if (process.platform === "darwin") {
+      // ACT: WKWebView 的 Command 编辑快捷键由原生菜单角色交给当前响应者处理。
+      ApplicationMenu.setApplicationMenu([
+        { label: "Toonflow", submenu: [
+          { role: "about" },
+          { type: "separator" },
+          { role: "hide" },
+          { role: "hideOthers" },
+          { role: "showAll" },
+          { type: "separator" },
+          { role: "quit" },
+        ] },
+        { label: t`编辑`, submenu: [
+          { role: "undo", label: t`撤销` },
+          { role: "redo", label: t`重做` },
+          { type: "separator" },
+          { role: "cut", label: t`剪切` },
+          { role: "copy", label: t`复制` },
+          { role: "paste", label: t`粘贴` },
+          { role: "selectAll", label: t`全选` },
+        ] },
+      ]);
+    }
     try {
       if (startupSettings?.settings?.ui?.startupAnimation !== false) {
         splash = await showNativeSplash(resolve(PATHS.VIEWS_FOLDER, "../startup"), () => {
@@ -97,13 +125,14 @@ async function start() {
     }
     process.env.toonflowDesktop = "1";
     const { createApp } = await import("@toonflow/server/app");
-    const { hash } = await Bun.file(resolve(PATHS.RESOURCES_FOLDER, "version.json")).json();
-    if (typeof hash !== "string" || !hash) throw new Error("应用构建标识缺失，无法同步内置插件");
+    const { hash } = await file(resolve(PATHS.RESOURCES_FOLDER, "version.json")).json();
+    if (typeof hash !== "string" || !hash) throw new Error(t`应用构建标识缺失，无法同步内置插件`);
     const app = await createApp({
       webRoot: resolve(PATHS.VIEWS_FOLDER, "mainview"),
       dataDirectory,
       toolsRoot: resolve(PATHS.VIEWS_FOLDER, "../tools"),
       nodesRoot: resolve(PATHS.VIEWS_FOLDER, "../nodes"),
+      extRoot: resolve(PATHS.VIEWS_FOLDER, "../ext"),
       providersRoot: resolve(PATHS.VIEWS_FOLDER, "../providers"),
       skillsRoot: resolve(PATHS.VIEWS_FOLDER, "../skills"),
       // ACT: 暂不安装内置团队，随团队打包一同恢复。
@@ -142,7 +171,7 @@ async function start() {
       const target = new URL(url);
       if (target.protocol !== "http:" && target.protocol !== "https:") return;
       if (!Utils.openExternal(target.href)) {
-        void Utils.showMessageBox({ type: "error", title: "打开链接失败", message: "请检查默认浏览器设置后重试。" });
+        void Utils.showMessageBox({ type: "error", title: t`打开链接失败`, message: t`请检查默认浏览器设置后重试。` });
       }
     });
     // 页面重载时监听器随旧页面销毁，安装请求等新页面 ready 后再投递。
@@ -150,6 +179,7 @@ async function start() {
     let isShowing = false;
     app.locals.desktop = {
       openUrl,
+      showItemInFolder: Utils.showItemInFolder,
       readClipboardText: Utils.clipboardReadText,
       writeClipboardText: Utils.clipboardWriteText,
       selectSaveFile,
@@ -177,6 +207,8 @@ async function start() {
           void restoreInstallRegistration(installDirectory);
         }
         if (failed) {
+          if (process.platform === "win32") confirmWindowsUpdateStartup(PATHS.RESOURCES_FOLDER, true);
+          else await (Updater as DesktopRuntime["updater"]).confirmStartup?.(true);
           deliverInstall = undefined;
           return;
         }
@@ -190,9 +222,11 @@ async function start() {
           deliverInstall(pendingInstalls[0]!);
           pendingInstalls.shift();
         }
+        if (process.platform === "win32") confirmWindowsUpdateStartup(PATHS.RESOURCES_FOLDER);
+        else await (Updater as DesktopRuntime["updater"]).confirmStartup?.();
       },
       openDevTools() { mainWindow.webview.openDevTools(); },
-      // ACT: 仅 Windows 使用 2.0 的两阶段退出；Intel Mac 继续保留原 SDK 更新器。
+      // ACT: Windows 使用两阶段退出；Intel Mac 由兼容入口适配 1.18.1 更新器。
       updater: process.platform === "win32" ? createWindowsUpdater(PATHS.RESOURCES_FOLDER, Utils as unknown as Parameters<typeof createWindowsUpdater>[1]) : Updater,
     } satisfies DesktopRuntime;
     if (process.platform === "win32") {
@@ -218,7 +252,7 @@ async function start() {
       };
       if (icons.some((icon) => !icon)) {
         closeIcons();
-        throw new Error("无法加载主窗口图标");
+        throw new Error(t`无法加载主窗口图标`);
       }
       icons.forEach((icon, type) => native.SendMessageW(window, 0x80, type, icon));
       mainWindow.on("close", closeIcons);
@@ -232,11 +266,15 @@ async function start() {
     });
     if (process.platform === "win32") {
       // ACT: 运行信息随应用目录清理；启动器通过 PID 忽略已退出进程留下的端口。
-      writeFileSync(resolve(PATHS.RESOURCES_FOLDER, "desktopRuntime.json"), JSON.stringify({ pid: process.pid, port: address.port }));
+      writeAtomicSync(resolve(PATHS.RESOURCES_FOLDER, "desktopRuntime.json"), JSON.stringify({ pid: process.pid, port: address.port }));
     }
   } catch (error) {
     splash?.close();
     console.error("桌面启动失败：", error);
+    if (process.platform === "win32") {
+      try { confirmWindowsUpdateStartup(PATHS.RESOURCES_FOLDER, true); }
+      catch (resultError) { console.error("更新启动结果写入失败：", resultError); }
+    }
     Utils.quit(1);
   }
 }

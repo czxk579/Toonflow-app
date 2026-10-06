@@ -253,12 +253,13 @@ jobs:
           mkdir -p "$inspectionDirectory"
           export inspectionDirectory
           bun -e '
-          import { readdirSync } from "node:fs";
+          import { readdirSync } from "@toonflow/file";
+          import { file, write } from "@toonflow/file/bun";
           import { join } from "node:path";
           const directory = process.env.releaseDirectory;
           const archives = readdirSync(directory).filter(name => name.endsWith(".tar.zst"));
           if (archives.length !== 1) throw new Error("更新包数量不正确");
-          await Bun.write(join(process.env.inspectionDirectory, "app.tar"), Bun.zstdDecompressSync(await Bun.file(join(directory, archives[0])).arrayBuffer()));
+          await write(join(process.env.inspectionDirectory, "app.tar"), Bun.zstdDecompressSync(await file(join(directory, archives[0])).arrayBuffer()));
           '
           tar -xf "$inspectionDirectory/app.tar" -C "$inspectionDirectory"
           app="$inspectionDirectory/toonflow.app"

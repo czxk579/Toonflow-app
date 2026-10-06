@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "@toonflow/file";
 import { dirname, relative, resolve } from "node:path";
 import sharedConfig from "../../electrobun.config";
 
@@ -23,6 +23,7 @@ writeFileSync(resolve(generatedDir, "config.json"), JSON.stringify({
 writeFileSync(resolve(generatedDir, "electrobun.ts"), `import { Utils } from "electrobun/bun";
 export * from "electrobun/bun";
 export { default } from "electrobun/bun";
+export { default as Updater } from "../updater";
 // ACT: 1.18.1 原生退出函数固定使用退出码 0，无法转交 2.0 的退出码参数。
 const utils = { ...Utils, quit: (exitCode?: number) => { void exitCode; Utils.quit(); } };
 export { utils as Utils };

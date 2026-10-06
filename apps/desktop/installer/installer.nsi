@@ -182,9 +182,9 @@ tarReady:
   SetOutPath "$INSTDIR\app\bin"
   IfErrors installFailed
   StrCpy $installStep "初始化 SDK 安装记录"
-  File "/oname=$PLUGINSDIR\initializeInstall.ts" "initializeInstall.ts"
+  File "/oname=$PLUGINSDIR\initializeInstall.js" "${initializeInstallScript}"
   IfErrors installFailed
-  nsExec::ExecToStack '"$INSTDIR\app\bin\bun.exe" "$PLUGINSDIR\initializeInstall.ts" "$INSTDIR" "$DESKTOP" "$SMPROGRAMS"'
+  nsExec::ExecToStack '"$INSTDIR\app\bin\bun.exe" "$PLUGINSDIR\initializeInstall.js" "$INSTDIR" "$DESKTOP" "$SMPROGRAMS"'
   Pop $0
   Pop $1
   ${If} $0 != 0

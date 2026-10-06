@@ -25,6 +25,7 @@ export default {
       // ACT: 团队暂不打包，恢复时取消注释。
       // "build/agents": "agents",
       "build/nodes": "nodes",
+      "build/ext": "ext",
       "packages/providers/src": "providers",
       "packages/skills": "skills",
       "packages/startup/assets/startup.json": "startup/startup.json",
